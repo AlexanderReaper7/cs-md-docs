@@ -87,7 +87,9 @@ export async function run(): Promise<void> {
 
   await check('inline tags become Markdown', async () => {
     const text = await hoverText(document, at('Mixed'));
-    assert.match(text, /`Sample\.Device\.Tagged`/);
+    // A cref is a symbol reference like any other, so it is clickable, not a dead
+    // code span. `<c>` is formatting and stays one.
+    assert.match(text, /\[`Sample\.Device\.Tagged`\]\(command:csMdDocs\.goToSymbol\?/);
     assert.match(text, /`List<int>`/);
   });
 
@@ -104,8 +106,53 @@ export async function run(): Promise<void> {
   await check('headings are demoted and block Markdown survives', async () => {
     const text = await hoverText(document, at('RustShaped'));
     assert.match(text, /^### Examples$/m);
-    assert.match(text, /^> A blockquote survives/m);
-    assert.match(text, /^\| 3 \| `softwareId` \|$/m);
+    assert.match(text, /A blockquote survives/);
+    assert.match(text, /^\|.*3.*\|.*`softwareId`.*\|$/m);
+  });
+
+  await check('the styling budget is spent where the stylesheet is silent', async () => {
+    const text = await hoverText(document, at('RustShaped'));
+    // Matched exactly, because the sanitizer's allow-list tests the attribute
+    // against a regex: a space after the colon, or a missing semicolon, and the
+    // whole thing is dropped without a word. The `>` is gone with it: the bar is
+    // the blockquote now, and the element only contributed 40px of browser default.
+    assert.match(
+      text,
+      /^<span style="color:var\(--vscode-textBlockQuote-border\);">▌<\/span>&nbsp;A blockquote survives/m,
+      `the quote bar is missing, malformed, or still indented:\n${text}`,
+    );
+    assert.match(text, /^\|&nbsp;byte&nbsp;\|&nbsp;meaning&nbsp;\|$/m, `table cells are unpadded:\n${text}`);
+  });
+
+  await check('a quote holding a list keeps the marker that groups it', async () => {
+    const text = await hoverText(document, at('Grouped'));
+    assert.match(
+      text,
+      /^> <span style="color:var\(--vscode-textBlockQuote-border\);">▌<\/span>&nbsp;Two things matter:$/m,
+      `the intro line lost its marker or its bar:\n${text}`,
+    );
+    // The bullets keep the marker and their own first character. A bar in front of
+    // one would stop it being a list item at all.
+    assert.match(text, /^> - the `softwareId` at byte 3$/m, `a bullet was mangled:\n${text}`);
+  });
+
+  await check('an unlabelled code block is labelled, so the hover tokenizes it', async () => {
+    const text = await hoverText(document, at('Grouped'));
+    assert.match(text, /```csharp\r?\ndev\.Send\(frame\);\r?\n```/, `the fence is unlabelled:\n${text}`);
+  });
+
+  await check('HTML is enabled, or the bar renders as literal text', async () => {
+    const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+      'vscode.executeHoverProvider',
+      document.uri,
+      at('RustShaped'),
+    );
+    const ours = (hovers ?? [])
+      .flatMap((hover) => hover.contents)
+      .filter((content): content is vscode.MarkdownString => content instanceof vscode.MarkdownString)
+      .find((content) => content.value.includes('A blockquote survives'));
+    assert.ok(ours, 'our contribution is not in the hover at all');
+    assert.equal(ours.supportHtml, true, 'the span would be shown as source, not rendered');
   });
 
   await check('intra-doc links become command links', async () => {

@@ -1,0 +1,53 @@
+<!--
+  The Marketplace tile, and the source of truth for it. `images/icon.png` is
+  rasterized from this file by `npm run icon`; the manifest cannot point here,
+  because vsce refuses an SVG icon outright ("SVGs can't be used as icons").
+
+  The mark is the extension's job stated twice: `///`, then the rendered prose the
+  slashes are hiding. Colours are Dark+'s, so the tile reads as "this is about a
+  comment" to anyone who has looked at C# in VS Code, with no glyph saying so.
+
+  Constraint that drove the design: the tile is shown at 42px in Marketplace
+  search results, a third of its nominal size. Two shapes, high contrast, no text.
+
+  Authored in 512-space rather than 128 so every edge lands on an integer, which
+  is also the space the shapes were originally worked out in.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="128" height="128">
+  <rect width="512" height="512" rx="110" fill="#181818"/>
+
+  <!--
+    Three copies of one parallelogram at x + 0, 70, 140. The lean is a real `/`,
+    measured from the glyph rather than guessed: horizontal run over vertical rise
+    is 0.406 in Consolas and 0.431 in Cascadia Mono, the two fonts a default
+    Windows VS Code renders a comment in. 92 over 220 is 0.418, between them.
+    It used to be 58 over 256, or 0.227, which read as an italic bar rather than a
+    slash.
+
+    The stroke deliberately does not match: 34 over 220 is 0.155 against a real
+    0.10, because a glyph's weight is set for text at 14px and this is a mark that
+    has to survive being drawn at 42. Matching the lean and not the weight is the
+    whole trade.
+
+    The rise came down from 256 to 220 to pay for the lean: a slash's bounding box
+    is stroke + slant wide, so leaning it properly cost 50 units of width per
+    slash, which the prose lines were occupying.
+  -->
+  <g fill="#6A9955">
+    <path d="M132 146 H166 L74 366 H40 Z"/>
+    <path d="M202 146 H236 L144 366 H110 Z"/>
+    <path d="M272 146 H306 L214 366 H180 Z"/>
+  </g>
+
+  <!--
+    Centred as a block on the slashes' own vertical centre (146..366), so the two
+    halves sit on one optical baseline rather than one being measured from the
+    tile. Height 40 with rx 20 is a full stadium; the third line is short because
+    a paragraph's last line is.
+  -->
+  <g fill="#D4D4D4">
+    <rect x="336" y="162" width="136" height="40" rx="20"/>
+    <rect x="336" y="236" width="136" height="40" rx="20"/>
+    <rect x="336" y="310" width="70" height="40" rx="20"/>
+  </g>
+</svg>

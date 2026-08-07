@@ -154,7 +154,12 @@ class UntaggedDocHoverProvider implements vscode.HoverProvider {
     // reaches this string as an ordinary Markdown link. Naming the single command
     // we emit ourselves means every other one is refused by VS Code.
     content.isTrusted = { enabledCommands: [GO_TO_SYMBOL] };
-    content.supportHtml = false;
+    // HTML is enabled only for the markup the decorator adds, and is safe because
+    // of an invariant the renderer holds and `docComment.test.ts` pins: every `<`
+    // that came from the source file is escaped or sits inside a code span, so the
+    // only live tag in this string is one we wrote. VS Code sanitizes on top of
+    // that, but the invariant is what this flag is resting on.
+    content.supportHtml = config.get<boolean>('hoverStyling', true);
     return new vscode.Hover(content, word);
   }
 
@@ -223,6 +228,8 @@ function renderOptions(config: vscode.WorkspaceConfiguration): RenderOptions {
   const linksEnabled = config.get<boolean>('symbolLinks', true);
   return {
     demoteHeadings: config.get<number>('demoteHeadings', 2),
+    hoverStyling: config.get<boolean>('hoverStyling', true),
+    defaultCodeLanguage: config.get<string>('defaultCodeLanguage', 'csharp'),
     symbolLink: linksEnabled
       ? (path) => `command:${GO_TO_SYMBOL}?${encodeURIComponent(JSON.stringify([path]))}`
       : undefined,

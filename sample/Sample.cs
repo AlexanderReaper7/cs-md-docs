@@ -1,3 +1,4 @@
+#pragma warning disable CA1822 // Mark members as static
 // Scratch file for hovering in the Extension Development Host, and the fixture
 // the integration test drives. The two sentinel sentences say which provider is
 // supposed to render them, so a duplicate is visible by reading the hover.
@@ -13,8 +14,10 @@ public sealed class Device
     /// - the `softwareId` at byte 3, which is how the reply is matched
     /// - **never** match a reply by arrival order
     ///
-    /// Takes a `Span<byte>`, and holds while a < b. Both of those break an XML
-    /// parser, which is the whole reason this extension scans by hand.
+    /// Takes a `Span&lt;byte&gt;`, and holds while a < b. The entity is the spelling
+    /// docs/agents.md tells you to use, because a raw `<` costs the member its whole
+    /// entry in the generated XML file; the raw one beside it is here because this
+    /// extension has to render both, which is why it scans by hand.
     public void Untagged(Span<byte> frame) { }
 
     /// <summary>This sentence is tagged, so only Roslyn shows it.</summary>
@@ -52,6 +55,18 @@ public sealed class Device
     public void RustShaped() { }
 
     /// This sentence is untagged, so only cs-md-docs shows it.
+    ///
+    /// > Two things matter:
+    /// >
+    /// > - the `softwareId` at byte 3
+    /// > - never match a reply by arrival order
+    ///
+    /// <code>
+    /// dev.Send(frame);
+    /// </code>
+    public void Grouped() { }
+
+    /// This sentence is untagged, so only cs-md-docs shows it.
     /// Pairs with [`Device.Tagged`], and [the untagged one](Device.Untagged).
     /// An ordinary [note] and a [link](https://example.com/x) are left alone.
     public void Referencing() { }
@@ -64,6 +79,7 @@ public sealed class Device
         NotDocumented();
         PastAnAttribute();
         RustShaped();
+        Grouped();
         Referencing();
     }
 }

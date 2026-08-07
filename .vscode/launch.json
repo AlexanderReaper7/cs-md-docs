@@ -2,10 +2,43 @@
   "version": "0.2.0",
   "configurations": [
     {
+      // Inherits this machine's profile: your theme, and the C# extension, so the
+      // popup on screen is the merged one a user actually gets. Both halves of it
+      // are the point, and neither is visible without Roslyn.
+      //
+      // `sample` is opened for you because activation is `onLanguage:csharp`. On an
+      // empty window nothing activates, which reads as "no extensions installed"
+      // when everything is installed and merely idle.
       "name": "Run Extension",
       "type": "extensionHost",
       "request": "launch",
-      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${workspaceFolder}/sample"
+      ],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "npm: compile"
+    },
+    {
+      // For reproducing a bug with nothing else in the way. `--disable-extensions`
+      // drops this machine's extensions and leaves VS Code's own 95 loaded, so the
+      // `csharp` grammar and language id survive and a fence is still tokenized;
+      // measured against 1.132.0. Roslyn does not survive, so there is no second
+      // half to the hover, no definition provider, and symbol links resolve to
+      // nothing. Matches the `isolated` pass of `npm run test:e2e`.
+      //
+      // The throwaway `--user-data-dir` is what keeps a dev-host experiment from
+      // rewriting the state your editor is using. It is gitignored.
+      "name": "Run Extension (isolated)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${workspaceFolder}/sample",
+        "--disable-extensions",
+        "--user-data-dir=${workspaceFolder}/.vscode-dev/user",
+        "--extensions-dir=${workspaceFolder}/.vscode-dev/ext"
+      ],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
       "preLaunchTask": "npm: compile"
     }

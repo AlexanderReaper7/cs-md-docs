@@ -1,11 +1,22 @@
+# What does NOT go in the VSIX. `images/` is absent on purpose: the PNG has to
+# ship, or the Marketplace listing has no tile. Only the PNG, though. The SVG it
+# is rendered from is source, and nothing in the package can read it: vsce
+# refuses an SVG icon, and the Marketplace strips one out of the README.
+images/*.svg
 .vscode/**
+.vscode-dev/**
+.github/**
+.githooks/**
 src/**
 sample/**
+docs/**
+scripts/**
 out/test/**
 out/**/*.map
 node_modules/**
 tsconfig.json
+package-lock.json
 .gitignore
-.githooks/**
-scripts/**
+.gitattributes
+CLAUDE.md
 *.vsix

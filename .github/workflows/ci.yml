@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Nothing here writes anything. The release workflow is the one that needs more.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      # Both matrix legs run to completion, so "broken on 26" and "broken
+      # everywhere" are distinguishable from the summary alone.
+      fail-fast: false
+      matrix:
+        # 24 is Active LTS and the floor the toolchain guarantees; 26 is current
+        # and what this is developed on. A newer runtime is the one more likely to
+        # break, so testing only the floor would test the wrong direction.
+        node: [24, 26]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # `npm ci` also runs `prepare`, which points core.hooksPath at .githooks.
+      # Harmless here: the post-commit hook needs pwsh and nothing commits in CI.
+      - run: npm ci
+
+      # Compile plus the pure renderer suite. The extension-host tests are
+      # deliberately absent: they need a real VS Code, and the `roslyn` pass needs
+      # the C# extension junctioned out of a local install. That leaves
+      # registration, the sanitizer allow-list and the command link unverified
+      # here; `npm run test:e2e` on a workstation is what covers them.
+      - run: npm test
+
+      # Packaging is a test. A missing icon, an unreadable README or a manifest
+      # field the Marketplace rejects fails here rather than at `git push --tags`.
+      - name: Package
+        run: npx --no-install vsce package --out cs-md-docs-ci.vsix
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.node == 24
+        with:
+          name: vsix
+          path: cs-md-docs-ci.vsix
+          retention-days: 14

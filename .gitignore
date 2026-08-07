@@ -5,3 +5,10 @@ out/
 # Restored by the C# extension when the integration test opens sample/
 obj/
 bin/
+
+# Throwaway profile for the isolated launch config, so a dev-host experiment
+# cannot rewrite the state the real editor is using.
+.vscode-dev/
+
+# Written by `check-release.mjs --notes` for `gh release create`.
+release-notes.md
