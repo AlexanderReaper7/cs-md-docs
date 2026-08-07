@@ -6,3 +6,6 @@ out/**/*.map
 node_modules/**
 tsconfig.json
 .gitignore
+.githooks/**
+scripts/**
+*.vsix

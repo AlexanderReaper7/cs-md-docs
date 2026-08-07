@@ -44,6 +44,16 @@
           "default": false,
           "description": "Suppress this hover entirely when the doc comment contains any XML section tag. Untagged text is already excluded from tagged sections, so this only matters if you want tagged members to be exclusively Roslyn's."
         },
+        "csMdDocs.demoteHeadings": {
+          "type": "number",
+          "default": 2,
+          "description": "Push every Markdown heading down by this many levels. Rust puts '# Examples' at the top level, which in a hover popup is a title larger than the signature beneath it. Set to 0 to render headings as written."
+        },
+        "csMdDocs.symbolLinks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Turn a bracket reference such as [`Device.Send`] into a link that jumps to the symbol, resolved through the C# workspace symbol provider. Off renders it as a plain code span."
+        },
         "csMdDocs.heading": {
           "type": "string",
           "default": "",
@@ -57,7 +67,11 @@
     "watch": "tsc -p . -w",
     "test": "npm run compile && node --test \"out/test/*.test.js\"",
     "vscode:prepublish": "npm run compile",
-    "test:e2e": "npm run compile && node out/test/runTests.js"
+    "test:e2e": "npm run compile && node out/test/runTests.js",
+    "deploy": "pwsh -NoProfile -File scripts/deploy.ps1",
+    "package": "pwsh -NoProfile -File scripts/deploy.ps1 -NoInstall",
+    "hooks": "node scripts/install-hooks.mjs",
+    "prepare": "node scripts/install-hooks.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

@@ -34,6 +34,28 @@ public sealed class Device
     [Obsolete("use Untagged")]
     public void PastAnAttribute() { }
 
+    /// This sentence is untagged, so only cs-md-docs shows it.
+    ///
+    /// # Examples
+    ///
+    /// ```csharp
+    /// var pressed = new List<int>();
+    /// if (a < b) { dev.Send(frame); }
+    /// /// <summary>Even a doc tag in here is sample code.</summary>
+    /// ```
+    ///
+    /// > A blockquote survives, because `>` is not escaped.
+    ///
+    /// | byte | meaning |
+    /// |---|---|
+    /// | 3 | `softwareId` |
+    public void RustShaped() { }
+
+    /// This sentence is untagged, so only cs-md-docs shows it.
+    /// Pairs with [`Device.Tagged`], and [the untagged one](Device.Untagged).
+    /// An ordinary [note] and a [link](https://example.com/x) are left alone.
+    public void Referencing() { }
+
     public void Use()
     {
         Untagged(default);
@@ -41,5 +63,7 @@ public sealed class Device
         Mixed(default);
         NotDocumented();
         PastAnAttribute();
+        RustShaped();
+        Referencing();
     }
 }

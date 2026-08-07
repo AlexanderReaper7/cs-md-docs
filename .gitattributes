@@ -1,0 +1,6 @@
+# A hook is run by sh, and sh reads the shebang literally. Checked out with CRLF
+# on a machine where core.autocrlf is true, `#!/bin/sh` becomes `#!/bin/sh\r` and
+# the hook dies with "bad interpreter". The working copy here is already LF, so
+# this pins what a fresh clone gets rather than changing anything now.
+.githooks/** text eol=lf
+*.sh text eol=lf

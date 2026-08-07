@@ -1,6 +1,7 @@
 import * as assert from 'node:assert/strict';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { scoreSymbol } from '../../extension';
 
 /**
  * Runs inside a real VS Code extension host. Two modes:
@@ -90,7 +91,61 @@ export async function run(): Promise<void> {
     assert.match(text, /`List<int>`/);
   });
 
+  await check('a fenced block reaches the hover verbatim', async () => {
+    const text = await hoverText(document, at('RustShaped'));
+    assert.match(text, /```csharp\r?\n/);
+    assert.match(text, /var pressed = new List<int>\(\);/);
+    assert.equal(occurrences(text, '&lt;'), 0, `something in the fence was escaped:\n${text}`);
+    // The tag scanner has to be inert in here, or the rest of the comment is
+    // swallowed by a <summary> that was only ever sample code.
+    assert.match(text, /Even a doc tag in here is sample code/);
+  });
+
+  await check('headings are demoted and block Markdown survives', async () => {
+    const text = await hoverText(document, at('RustShaped'));
+    assert.match(text, /^### Examples$/m);
+    assert.match(text, /^> A blockquote survives/m);
+    assert.match(text, /^\| 3 \| `softwareId` \|$/m);
+  });
+
+  await check('intra-doc links become command links', async () => {
+    const text = await hoverText(document, at('Referencing'));
+    const command = /\(command:csMdDocs\.goToSymbol\?%5B%22([^%]+)%22%5D\)/g;
+    const targets = [...text.matchAll(command)].map((m) => m[1]);
+    assert.deepEqual(targets, ['Device.Tagged', 'Device.Untagged'], `got: ${text}`);
+    assert.match(text, /\[`Device\.Tagged`\]\(command:/);
+    assert.match(text, /\[the untagged one\]\(command:/);
+  });
+
+  await check('ordinary Markdown links are not turned into commands', async () => {
+    const text = await hoverText(document, at('Referencing'));
+    assert.match(text, /An ordinary \[note\] and a \[link\]\(https:\/\/example\.com\/x\)/);
+  });
+
   if (mode === 'roslyn') {
+    await check('a resolved intra-doc link finds the symbol', async () => {
+      const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+        'vscode.executeWorkspaceSymbolProvider',
+        'Tagged',
+      );
+      const seen = (symbols ?? [])
+        .map((s) => `${s.containerName}|${s.name}`)
+        .join('\n    ');
+      // Ranked by the extension's own function rather than a copy of it, because
+      // the copy is what silently drifted from what Roslyn actually returns.
+      const ranked = (symbols ?? [])
+        .map((symbol) => ({ symbol, score: scoreSymbol(symbol, 'Tagged', 'Device') }))
+        .sort((a, b) => b.score - a.score);
+      const best = ranked[0];
+      assert.ok(best && best.score === 4, `no confident Device.Tagged among:\n    ${seen}`);
+      assert.match(best.symbol.location.uri.fsPath, /Sample\.cs$/);
+      assert.equal(
+        best.symbol.location.range.start.line,
+        document.getText().split('\n').findIndex((l) => l.includes('public void Tagged(')),
+        'the link would jump to the wrong line',
+      );
+    });
+
     await check('a mixed comment shows each half exactly once', async () => {
       const text = await hoverText(document, at('Mixed'));
       assert.equal(occurrences(text, OURS), 1, `our half is not shown exactly once:\n${text}`);

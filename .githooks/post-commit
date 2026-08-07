@@ -1,0 +1,30 @@
+#!/bin/sh
+# Install the extension you just committed.
+#
+# post-commit rather than pre-commit, for two reasons. An installer run before
+# the commit would deploy a working tree that is not what got recorded, so the
+# editor and the history could disagree. And a failing install is information,
+# not grounds for refusing a commit: this hook cannot abort anything, which is
+# exactly the property wanted here.
+#
+# Escape hatch is an environment variable, not `git commit --no-verify`: that
+# flag only skips pre-commit and commit-msg, and never reaches this hook.
+#
+#   CSMD_NO_DEPLOY=1 git commit -m "readme typo"
+
+[ -n "$CSMD_NO_DEPLOY" ] && exit 0
+
+root=$(git rev-parse --show-toplevel)
+
+if ! command -v pwsh >/dev/null 2>&1; then
+    echo "post-commit: pwsh not on PATH, skipping deploy" >&2
+    exit 0
+fi
+
+# -NoProfile so a profile that writes to stdout or changes location cannot
+# affect the build. Errors are reported and swallowed; the commit already exists.
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$root/scripts/deploy.ps1" || {
+    echo "post-commit: deploy failed, the commit is fine. Run npm run deploy to see why." >&2
+}
+
+exit 0

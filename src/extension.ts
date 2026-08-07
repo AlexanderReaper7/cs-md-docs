@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
-import { collectDocComment, extractUntagged } from './docComment';
+import { collectDocComment, extractUntagged, RenderOptions } from './docComment';
+
+/** Target of an intra-doc link. Internal: reachable only from a hover we rendered. */
+const GO_TO_SYMBOL = 'csMdDocs.goToSymbol';
 
 /**
  * VS Code asks every registered hover provider for the position and merges the
@@ -17,9 +20,97 @@ export function activate(context: vscode.ExtensionContext): void {
       ],
       new UntaggedDocHoverProvider(cache),
     ),
+    vscode.commands.registerCommand(GO_TO_SYMBOL, goToSymbol),
     vscode.workspace.onDidChangeTextDocument((e) => cache.invalidate(e.document.uri)),
+    // Rendering options come from settings, and the cache holds rendered output.
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('csMdDocs')) {
+        cache.clear();
+      }
+    }),
     cache,
   );
+}
+
+/**
+ * Jump to the symbol an intra-doc link named. The workspace symbol provider is
+ * the C# extension's, so this resolves anything Roslyn has in the solution, and
+ * nothing when the language server has not started yet.
+ *
+ * There is no overload resolution here: a doc comment names a member, not a
+ * signature, so the ranking prefers an exact `Container.Member` match and then
+ * settles for the first member with the right name.
+ */
+async function goToSymbol(path: string): Promise<void> {
+  const segments = path.split('.');
+  const name = segments[segments.length - 1];
+  const container = segments.slice(0, -1).join('.');
+
+  let symbols: vscode.SymbolInformation[] | undefined;
+  try {
+    symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+      'vscode.executeWorkspaceSymbolProvider',
+      name,
+    );
+  } catch {
+    symbols = undefined;
+  }
+
+  let best: vscode.SymbolInformation | undefined;
+  let bestScore = 0;
+  for (const symbol of symbols ?? []) {
+    const score = scoreSymbol(symbol, name, container);
+    if (score > bestScore) {
+      best = symbol;
+      bestScore = score;
+    }
+  }
+
+  if (!best) {
+    void vscode.window.showWarningMessage(
+      `cs-md-docs: no symbol named ${path} in the workspace.`,
+    );
+    return;
+  }
+  await vscode.window.showTextDocument(best.location.uri, {
+    selection: best.location.range,
+  });
+}
+
+/**
+ * Zero means "not this symbol"; higher is a closer match to the written path.
+ *
+ * `containerName` is a display string and not an API contract: Roslyn fills it
+ * with `in Device (project Sample (net10.0))` where the docs suggest something
+ * like `Sample.Device`. So the qualifier is matched as whole words appearing
+ * anywhere in it, which holds for either shape and does not depend on a phrasing
+ * that is free to change or be localized.
+ */
+export function scoreSymbol(
+  symbol: vscode.SymbolInformation,
+  name: string,
+  container: string,
+): number {
+  // Workspace symbol providers match fuzzily, so `Send` also returns `SendAsync`.
+  const plain = symbol.name.replace(/[(<].*$/, '');
+  if (plain !== name) {
+    return 0;
+  }
+  if (!container) {
+    return 2;
+  }
+
+  const owner = symbol.containerName ?? '';
+  const wanted = container.split('.').filter(Boolean);
+  const found = wanted.filter((segment) =>
+    new RegExp(`\\b${segment.replace(/[^\w]/g, '\\$&')}\\b`).test(owner),
+  ).length;
+  if (found === wanted.length) {
+    return 4;
+  }
+  // A name-only match still beats going nowhere, so an unqualified or
+  // misqualified reference lands on the one member that carries the name.
+  return found > 0 ? 3 : 1;
 }
 
 export function deactivate(): void {
@@ -57,8 +148,12 @@ class UntaggedDocHoverProvider implements vscode.HoverProvider {
 
     const heading = config.get<string>('heading', '');
     const content = new vscode.MarkdownString(heading ? heading + rendered : rendered);
-    // Untrusted: the text comes from source files, which may not be ours.
-    content.isTrusted = false;
+    // Trust scoped to one command, never `true`. The text comes from source files
+    // that may not be ours, and a doc comment is free to write
+    // `<a href="command:workbench.action.terminal.sendSequence?...">`, which
+    // reaches this string as an ordinary Markdown link. Naming the single command
+    // we emit ourselves means every other one is refused by VS Code.
+    content.isTrusted = { enabledCommands: [GO_TO_SYMBOL] };
     content.supportHtml = false;
     return new vscode.Hover(content, word);
   }
@@ -104,7 +199,7 @@ class UntaggedDocHoverProvider implements vscode.HoverProvider {
     config: vscode.WorkspaceConfiguration,
   ): Promise<string | undefined> {
     const skipWhenTagged = config.get<boolean>('skipWhenTagged', false);
-    const cached = await this.cache.get(declaration);
+    const cached = await this.cache.get(declaration, renderOptions(config));
     if (!cached) {
       return undefined;
     }
@@ -118,6 +213,20 @@ class UntaggedDocHoverProvider implements vscode.HoverProvider {
 interface Declaration {
   uri: vscode.Uri;
   line: number;
+}
+
+/**
+ * Settings, in the shape the pure renderer takes. The symbol resolver is handed
+ * in as a callback so `docComment.ts` never learns what a command URI is.
+ */
+function renderOptions(config: vscode.WorkspaceConfiguration): RenderOptions {
+  const linksEnabled = config.get<boolean>('symbolLinks', true);
+  return {
+    demoteHeadings: config.get<number>('demoteHeadings', 2),
+    symbolLink: linksEnabled
+      ? (path) => `command:${GO_TO_SYMBOL}?${encodeURIComponent(JSON.stringify([path]))}`
+      : undefined,
+  };
 }
 
 interface CacheEntry {
@@ -134,7 +243,10 @@ interface CacheEntry {
 class DeclarationCache implements vscode.Disposable {
   private readonly entries = new Map<string, CacheEntry>();
 
-  async get(declaration: Declaration): Promise<CacheEntry | undefined> {
+  async get(
+    declaration: Declaration,
+    options: RenderOptions,
+  ): Promise<CacheEntry | undefined> {
     let target: vscode.TextDocument;
     try {
       target = await vscode.workspace.openTextDocument(declaration.uri);
@@ -155,7 +267,7 @@ class DeclarationCache implements vscode.Disposable {
     }
     const docLines = collectDocComment(lines, declaration.line);
     const result = docLines
-      ? extractUntagged(docLines)
+      ? extractUntagged(docLines, options)
       : { markdown: '', hadSections: false };
 
     const entry: CacheEntry = { version: target.version, ...result };
@@ -170,6 +282,10 @@ class DeclarationCache implements vscode.Disposable {
         this.entries.delete(key);
       }
     }
+  }
+
+  clear(): void {
+    this.entries.clear();
   }
 
   dispose(): void {
