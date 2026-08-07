@@ -1,0 +1,69 @@
+{
+  "name": "cs-md-docs",
+  "displayName": "C# Markdown Doc Comments",
+  "description": "Renders the untagged text of a C# /// comment as Markdown on hover, without duplicating anything Roslyn already shows.",
+  "version": "0.1.0",
+  "publisher": "AlexanderReaper7",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AlexanderReaper7/cs-md-docs.git"
+  },
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:csharp"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "C# Markdown Doc Comments",
+      "properties": {
+        "csMdDocs.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Render untagged /// text on hover."
+        },
+        "csMdDocs.crossFile": {
+          "type": "boolean",
+          "default": true,
+          "description": "Resolve the declaration through the C# definition provider, so hovering a call site in another file works. Turn off to only document symbols declared in the file under the cursor."
+        },
+        "csMdDocs.definitionTimeoutMs": {
+          "type": "number",
+          "default": 1500,
+          "description": "Give up on the definition provider after this long, so a slow language server never stalls the hover."
+        },
+        "csMdDocs.skipWhenTagged": {
+          "type": "boolean",
+          "default": false,
+          "description": "Suppress this hover entirely when the doc comment contains any XML section tag. Untagged text is already excluded from tagged sections, so this only matters if you want tagged members to be exclusively Roslyn's."
+        },
+        "csMdDocs.heading": {
+          "type": "string",
+          "default": "",
+          "description": "Markdown prepended to the rendered text, e.g. \"**Notes**\\n\\n\". Empty for none."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -p . -w",
+    "test": "npm run compile && node --test \"out/test/*.test.js\"",
+    "vscode:prepublish": "npm run compile",
+    "test:e2e": "npm run compile && node out/test/runTests.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.7.2"
+  }
+}
