@@ -32,6 +32,34 @@ A fence you open is verbatim until it closes: no escaping, no tag scanning, no h
 
 The tag scanner being off inside a fence is the sharper property. A C# example that demonstrates a doc comment contains `<summary>`, and a scanner that noticed it would open a section and swallow the rest of your prose. Fences are tracked per line, following CommonMark: three or more backticks or tildes after up to three spaces of indent, closed by a run of the same character at least as long with nothing after it. A fence is only tracked at depth zero, so a stray ``` inside a `<summary>` cannot hide the closing tag.
 
+## Inside a list, the source layout is discarded
+
+Decided 2026-08-08. One rule covers the whole of `<list>`: **between `<list>` and `</list>`, every line ending and every indent is generated from the tag stack, and none of it survives from the source.** The scanner otherwise passes a line's shape through untouched, so this is the one place it deliberately does not.
+
+The layout it exists for is the one Visual Studio's snippet writes and that most C# code in the wild carries:
+
+```csharp
+/// <list type="number">
+///   <item>
+///     <description>The value on the request.</description>
+///   </item>
+/// </list>
+```
+
+Passing that through is destructive in three separate ways, and each is invisible from the others:
+
+- **The tags' own line endings.** Every doc line contributes a `\n`, so `<item>` alone on a line puts a newline between the marker and the content beneath it: a bare `-` and then `text` as a separate block. A `</item>` alone on a line puts a blank line between two items, which CommonMark reads as a loose list and renders with a paragraph margin around every entry.
+- **The XML indent.** Four spaces before `<description>` land after the `1.` marker and its space, at five. CommonMark allows at most four before the content of an item becomes an indented code block, so the entry rendered as code rather than as prose.
+- **A blank line the author wrote.** Inside a list it is not spacing, it ends the list: everything after it parses as a new block at the top level. Dropping it costs a multi-paragraph item its paragraph break, which is the smaller loss, so blank lines are structural too and go with the rest.
+
+The implementation is a `structural` flag per line, set false by any emission that is not a list marker, and a leading-whitespace strip that runs only while the list stack is non-empty. The alternative was a regex recognising a structure-only line, which is a second parser over text the scanner is already walking, and the design of this file is that there is one.
+
+`OpenList` carries two indents rather than deriving one from the stack depth, because CommonMark measures a sublist against where the parent item's *content* starts and that is a function of the marker's width: three under `1.`, two under `-`, and four once the count reaches double digits. A fixed two-space step nests correctly under a bullet and silently starts a sibling list at the top level under a number.
+
+Two things `<list>` does that the rest of the scanner does not, both for the same reason. `</list>` emits a blank line, at the outermost level only, because without it the prose after the list is a lazy continuation of the last item and disappears into the bullet; inside the list the same blank line would make it loose. And `type` is read at the `<item>`, not at the `<list>`, because counting is the only thing the element name cannot carry: `bullet` and `table` need no state, `number` needs an ordinal per list.
+
+A `type="table"` list is a bullet list with an unmarked bold line above it, not a Markdown table. A `<list>` is not required to be tabular, `<listheader>` is optional, and the hover has no table styling worth the ambiguity, so promoting one shape to a grid would misrender the other.
+
 ## Markdown, not escaped prose
 
 Roslyn escapes Markdown punctuation before putting a summary in the hover, so its half of the popup arrives as `shows it\.` and a `- bullet` inside a `<summary>` renders as a literal hyphen. Text this extension renders is not escaped, so lists, backticks and bold work. That difference showed up in the integration test as an assertion failure and is the sharpest argument for writing prose outside the tags.

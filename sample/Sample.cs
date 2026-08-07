@@ -94,6 +94,38 @@ public sealed class Device
     public void Alerts() { }
 
     /// This sentence is untagged, so only cs-md-docs shows it.
+    ///
+    /// The indented multi-line form, which is what Visual Studio's snippet writes.
+    /// Numbered, nested, and with the XML indentation discarded: five spaces after
+    /// `1. ` would make the content an indented code block rather than an item.
+    ///
+    /// <list type="number">
+    ///   <item>
+    ///     <description>The value on the request.</description>
+    ///   </item>
+    ///   <item>
+    ///     <description>The client default, which itself has
+    ///       <list type="bullet">
+    ///         <item>a per-endpoint override</item>
+    ///         <item>a global one</item>
+    ///       </list>
+    ///     </description>
+    ///   </item>
+    /// </list>
+    ///
+    /// Prose after the list, which the list must not swallow.
+    ///
+    /// <list type="table">
+    ///   <listheader><term>Code</term><description>Meaning</description></listheader>
+    ///   <item><term>0x01</term><description>Busy</description></item>
+    /// </list>
+    ///
+    /// <code language="xml">
+    /// &lt;GenerateDocumentationFile&gt;true&lt;/GenerateDocumentationFile&gt;
+    /// </code>
+    public void Lists() { }
+
+    /// This sentence is untagged, so only cs-md-docs shows it.
     /// Pairs with [`Device.Tagged`], and [the untagged one](Device.Untagged).
     /// An ordinary [note] and a [link](https://example.com/x) are left alone.
     public void Referencing() { }
@@ -108,6 +140,7 @@ public sealed class Device
         RustShaped();
         Grouped();
         Alerts();
+        Lists();
         Referencing();
     }
 }

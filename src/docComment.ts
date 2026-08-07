@@ -52,6 +52,7 @@ const INLINE_TAGS: ReadonlySet<string> = new Set([
   'u',
   'a',
   'list',
+  'listheader',
   'item',
   'term',
   'description',
@@ -220,6 +221,24 @@ interface ScanState {
   inCodeSpan: boolean;
   /** Per open `<see>`/`<a>`: the href to close a Markdown link with, or null for a code span. */
   linkStack: (string | null)[];
+  /** Per open `<list>`, outermost first. Empty when no list is open. */
+  lists: OpenList[];
+}
+
+/**
+ * An open `<list>`. Both indents are carried rather than derived from the stack
+ * depth, because CommonMark measures a sublist against where the parent item's
+ * *content* starts, not against a fixed step: `1. ` opens content at column 3 and
+ * `- ` at column 2, so a flat two spaces would fall outside an ordered item and
+ * silently start a sibling list at the top level instead of nesting.
+ */
+interface OpenList {
+  /** The next number to write, or null for a bullet list. */
+  ordinal: number | null;
+  /** Indent for this list's own markers. */
+  indent: string;
+  /** Indent for anything nested under the item currently open, marker width included. */
+  contentIndent: string;
 }
 
 /** An open fenced code block: which character opened it, and how many of them. */
@@ -230,8 +249,14 @@ interface Fence {
 
 /** What the tag handlers are allowed to do to the output buffer. */
 interface Emitter {
-  /** Append Markdown verbatim. */
+  /** Append Markdown verbatim. Counts as content, so the line keeps its ending. */
   raw(text: string): void;
+  /**
+   * Append a list marker. Same as `raw` but leaves the line structural, so
+   * `<item>` alone on a line does not have its own line ending inserted between
+   * the marker and the content beneath it.
+   */
+  marker(text: string): void;
   /** Start a new line unless the buffer is already at one. */
   newline(): void;
   /** Leave exactly one blank line, so a block element is not glued to a paragraph. */
@@ -260,14 +285,29 @@ export function extractUntagged(
     mdFence: null,
     inCodeSpan: false,
     linkStack: [],
+    lists: [],
   };
   const demote = options.demoteHeadings ?? 0;
   const language = fenceLanguage(options.defaultCodeLanguage);
   let buf = '';
 
+  /**
+   * Whether this line has so far carried nothing but list structure. Such a line
+   * has already had its whole effect on the buffer, and its own line ending would
+   * land between an `<item>` marker and the content on the line beneath it. Only
+   * consulted inside a list, so nothing outside one changes shape.
+   */
+  let structural = true;
+
   const emitter: Emitter = {
     raw(text) {
       if (depth === 0 && text) {
+        buf += text;
+        structural = false;
+      }
+    },
+    marker(text) {
+      if (depth === 0) {
         buf += text;
       }
     },
@@ -292,11 +332,15 @@ export function extractUntagged(
     if (depth !== 0 || !text) {
       return;
     }
+    if (text.trim() !== '') {
+      structural = false;
+    }
     // A code span shows entities literally, so text bound for one is only decoded.
     buf += state.inCodeSpan ? decodeEntities(text) : escapeText(text);
   };
 
   for (const raw of docLines) {
+    structural = true;
     // A fence the user opened is opaque: no tag lives inside it, nothing in it
     // is escaped, and no heading is rewritten. This is checked per line rather
     // than per character because CommonMark only recognises a fence delimiter at
@@ -321,7 +365,14 @@ export function extractUntagged(
       }
     }
 
-    const line = depth === 0 && demote > 0 ? demoteHeading(raw, demote) : raw;
+    const demoted = depth === 0 && demote > 0 ? demoteHeading(raw, demote) : raw;
+    // Inside a list the leading whitespace is XML pretty-printing, and passing it
+    // through is destructive twice over: five spaces after `1. ` puts the item's
+    // content past the four that make it an indented code block, and an `<item>`
+    // written on its own indented line leaves a whitespace-only line between two
+    // items. The indentation that matters comes from the list stack instead.
+    const line =
+      depth === 0 && state.lists.length > 0 ? demoted.replace(/^[ \t]+/, '') : demoted;
     let i = 0;
     while (i < line.length) {
       if (state.inCodeFence) {
@@ -409,6 +460,9 @@ export function extractUntagged(
 
       if (SECTION_TAGS.has(name)) {
         hadSections = true;
+        // A section boundary is not list structure: `</summary>` on a line of its
+        // own still separates the prose above from the prose below.
+        structural = false;
         if (!tag.isSelfClosing) {
           depth = tag.isClose ? Math.max(0, depth - 1) : depth + 1;
         }
@@ -418,7 +472,12 @@ export function extractUntagged(
       i = lt + m![0].length;
     }
 
-    if (depth === 0) {
+    // A blank line counts as structural, so it is dropped inside a list too. It
+    // costs a multi-paragraph item its paragraph break, and it buys the list not
+    // being torn in half: an author's blank line makes CommonMark read everything
+    // after it as a new block at the top level, which ends the list rather than
+    // spacing it out. Losing a break is smaller than losing the list.
+    if (depth === 0 && !(structural && state.lists.length > 0)) {
       buf += '\n';
     }
   }
@@ -446,14 +505,24 @@ function applyInlineTag(
       state.inCodeSpan = !isClose;
       return;
 
-    case 'code':
+    case 'code': {
       if (isSelfClosing) {
         return;
       }
       out.blankLine();
-      out.raw(isClose ? '```' : '```' + language);
+      // An element that names its own language wins over the configured default.
+      // `language` is the spelling Sandcastle and DocFX use, `lang` the one people
+      // write; both go through `fenceLanguage`, so no attribute value can emit a
+      // backtick or a space into an info string and leave the fence unclosable.
+      // An attribute present but unusable yields a bare fence rather than the
+      // default, since an author who labelled the block said it is *not* C#, and
+      // grey is a smaller lie than the wrong grammar.
+      const written = attr(attrs, 'language') ?? attr(attrs, 'lang');
+      const info = written !== undefined ? fenceLanguage(written) : language;
+      out.raw(isClose ? '```' : '```' + info);
       state.inCodeFence = !isClose;
       return;
+    }
 
     case 'see':
     case 'a': {
@@ -529,21 +598,87 @@ function applyInlineTag(
       out.raw('*');
       return;
 
-    case 'item':
+    case 'list':
+      if (isSelfClosing) {
+        return;
+      }
+      // The blank line goes around the outermost list and nowhere inside it. On
+      // the close it is load-bearing rather than cosmetic: without it the prose
+      // after `</list>` is a lazy continuation of the last item and disappears
+      // into the bullet. Inside, a blank line would only make the list loose.
+      if (isClose) {
+        state.lists.pop();
+        if (state.lists.length === 0) {
+          out.blankLine();
+        }
+        return;
+      }
+      if (state.lists.length === 0) {
+        out.blankLine();
+      }
+      openList(state, attr(attrs, 'type'));
+      return;
+
+    case 'listheader':
+      // The header of a `type="table"` list. Markdown has no header row for a
+      // bullet list, so it becomes an unmarked line above the items: `<term>`
+      // already bolds it, which is the whole of what a header row conveys here.
+      // A real table was rejected because a `<list>` is not required to be one,
+      // and a bulleted list turned into a two-column table is a worse lie than a
+      // header that is merely a line.
       if (!isClose) {
         out.newline();
-        out.raw('- ');
+        out.marker(state.lists[state.lists.length - 1]?.indent ?? '');
       }
       return;
+
+    case 'item': {
+      if (isClose) {
+        return;
+      }
+      // A stray `<item>` with no `<list>` around it is malformed, and the author
+      // plainly meant a bullet. It gets one, unindented, rather than losing its
+      // marker: the list stack is a rendering aid, not a validator.
+      const list = state.lists[state.lists.length - 1];
+      const indent = list?.indent ?? '';
+      // `type` is consulted here and nowhere else, on the marker itself: an
+      // ordered list has to count, and counting is the one thing a tag name
+      // cannot carry.
+      const marker = list?.ordinal == null ? '- ' : `${list.ordinal++}. `;
+      if (list) {
+        list.contentIndent = indent + ' '.repeat(marker.length);
+      }
+      out.newline();
+      out.marker(indent + marker);
+      return;
+    }
 
     case 'term':
       out.raw(isClose ? '**: ' : '**');
       return;
 
-    // <u> has no Markdown equivalent; <list> and <description> are pure structure.
+    // <u> has no Markdown equivalent; <description> is pure structure.
     default:
       return;
   }
+}
+
+/**
+ * Push a list, indented to sit inside the item that encloses it.
+ *
+ * `bullet` is the default when `type` is absent or unrecognised, which is what
+ * the C# specification says and what every renderer downstream does. Only
+ * `number` counts; `table` is a bullet list with a header, because the hover has
+ * no table styling worth the ambiguity (see `decorate`).
+ */
+function openList(state: ScanState, type: string | undefined): void {
+  const parent = state.lists[state.lists.length - 1];
+  const indent = parent?.contentIndent ?? '';
+  state.lists.push({
+    ordinal: type?.toLowerCase() === 'number' ? 1 : null,
+    indent,
+    contentIndent: indent,
+  });
 }
 
 /**

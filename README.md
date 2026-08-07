@@ -104,6 +104,8 @@ VS Code asks every registered hover provider for a position and merges the resul
 - A backtick span is matched within one line. A code span split across two `///` lines is not detected.
 - Indented code blocks, the four-space kind, are **not** detected, so their content is escaped and tag-scanned like prose. Telling one from an indented continuation line inside a list needs real CommonMark block parsing, and rustdoc's own convention is fences anyway. Use a fence.
 - Setext headings, the `===` and `---` underline kind, are not demoted. Only the ATX `#` form is.
+- Inside a `<list>` the source layout is discarded and the structure is generated from the tags, so a list item cannot hold more than one paragraph: an author's blank line there would end the list rather than space it out, and it is dropped. See [inside a list, the source layout is discarded](docs/design.md#inside-a-list-the-source-layout-is-discarded).
+- `<list type="table">` renders as a bullet list with the `<listheader>` as an unmarked line above it, not as a Markdown table.
 - Intra-doc links resolve by name through the workspace symbol provider, so they need the language server up, and they cannot pick between overloads.
 - A fenced block is not compiled, run or checked. There is no doctest equivalent.
 

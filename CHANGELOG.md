@@ -4,6 +4,15 @@ Format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning i
 
 ## [Unreleased]
 
+### Fixed
+
+- `<list type="number">` counts. It rendered every item as a bullet, the `type` attribute never having been read.
+- A `<list>` nested in an `<item>` is indented to where the parent item's content starts, so it nests instead of ending the outer list. The indent is the parent's marker width, not a fixed step, because a `1.` marker opens its content at column three and a `-` at column two.
+- The indented multi-line form, which is what Visual Studio's snippet writes, renders as a list. Inside a `<list>` every line ending and every indent now comes from the tags and none from the source layout: the tags' own line endings used to land between a marker and the content beneath it, and the XML indent put that content five spaces past the `1.` marker, one more than CommonMark allows before it becomes an indented code block.
+- Prose after `</list>` is no longer read as a lazy continuation of the last item, which used to absorb it into the bullet.
+- `<listheader>` is recognised. It reached the reader as literal `&lt;listheader>` text, the tag not being in the element table at all. It renders as an unmarked line above the items, Markdown having no header row for a list.
+- `<code language="xml">` and `<code lang="…">` label the fence with what the element says. Every fence took `csMdDocs.defaultCodeLanguage` regardless, so an XML or PowerShell sample was tokenized as C#.
+
 ## [0.1.0] - 2026-08-07
 
 First release.

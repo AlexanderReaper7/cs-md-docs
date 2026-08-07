@@ -32,6 +32,7 @@ A VS Code extension that renders the *untagged* prose of a C# `///` comment as M
 
 - Why the parser is hand-rolled rather than an XML parse: *Why the parser is hand-rolled*
 - Why a blockquote loses its `>`, with the 40px/484px measurement: *The bar replaces the blockquote, it does not decorate one*
+- Why a `<list>` discards the source's line endings and indentation, and why `OpenList` carries two indents rather than a depth: *Inside a list, the source layout is discarded*
 - Why an alert's title and bar are drawn here, `supportAlertSyntax` being proposed API: *Alerts are drawn here because nothing downstream will*
 - Why an inline code span is never syntax highlighted, and what rust-analyzer does instead: *Highlighting*
 - Which spellings of a symbol reference resolve, and why a bare `[note]` does not: *Referencing symbols*, and the rules themselves in the README

@@ -130,14 +130,17 @@ Use these freely outside a section; they become the Markdown equivalent.
 | Written | Renders as |
 |---|---|
 | `<c>x</c>`, `<tt>x</tt>` | `` `x` `` |
-| `<code>…</code>` | a fenced block, labelled `csharp` |
+| `<code>…</code>` | a fenced block, labelled `csharp` unless the element carries `language=` or `lang=` |
 | `<b>`, `<strong>` | `**bold**` |
 | `<i>`, `<em>` | `*italic*` |
 | `<paramref name="x"/>`, `<typeparamref name="T"/>` | `` `x` `` |
 | `<para>` | a paragraph break |
 | `<br/>` | a hard line break |
-| `<list><item>…` | a bullet list |
+| `<list><item>…` | a bullet list, or a numbered one with `type="number"` |
+| `<listheader><term>…` | an unmarked bold line above the items |
 | `<a href="…">text</a>` | a link |
+
+A `<list>` may be laid out however you like, indented and across as many lines as you want: inside one, the line endings and the indentation come from the tags and the source layout is discarded. The one thing that costs you is a blank line inside an `<item>`, so an item is a single paragraph. Write the Markdown form when you have the choice; the XML one exists so that a comment written before the extension still renders.
 
 `<u>` has no Markdown equivalent and is dropped. Prefer the Markdown spelling over the XML one throughout: `**bold**` over `<b>`, backticks over `<c>`, a fence over `<code>`. The XML forms exist so that a comment written before the extension still renders.
 

@@ -148,6 +148,143 @@ test('inline tags become Markdown', () => {
   );
 });
 
+test('a bullet list is the default, as it is for every renderer downstream', () => {
+  assert.equal(
+    render(doc('<list><item>a</item><item>b</item></list>')),
+    '- a\n- b',
+    'an absent type is bullet',
+  );
+  assert.equal(
+    render(doc('<list type="wat"><item>a</item></list>')),
+    '- a',
+    'and so is one nothing has heard of',
+  );
+});
+
+test('an ordered list counts, which is the one thing a tag name cannot carry', () => {
+  assert.equal(
+    render(doc('<list type="number">', '<item><description>first</description></item>', '<item><description>second</description></item>', '</list>')),
+    '1. first\n2. second',
+  );
+});
+
+test('each list counts from one, the stack being per element', () => {
+  assert.equal(
+    render(doc('<list type="number"><item>a</item></list>', 'Between.', '<list type="number"><item>b</item></list>')),
+    '1. a\n\nBetween.\n\n1. b',
+  );
+});
+
+test('a nested list is indented to where the parent item content starts', () => {
+  assert.equal(
+    render(doc('<list type="bullet">', '<item>outer', '<list type="bullet"><item>inner</item></list>', '</item>', '</list>', 'After.')),
+    '- outer\n  - inner\n\nAfter.',
+    'two spaces under `- `, and the prose after the list is not swallowed by it',
+  );
+  // The reason `contentIndent` is carried rather than derived from stack depth:
+  // `1. ` opens content at column three, so two spaces would put the sublist
+  // outside the item and start a sibling list at the top level instead.
+  assert.equal(
+    render(doc('<list type="number"><item>first<list type="bullet"><item>inner</item></list></item></list>')),
+    '1. first\n   - inner',
+    'three spaces under `1. `',
+  );
+  assert.equal(
+    render(
+      doc(
+        '<list type="number">',
+        ...Array.from({ length: 10 }, (_, k) => `<item>i${k}</item>`),
+        '<item>last<list type="bullet"><item>inner</item></list></item>',
+        '</list>',
+      ),
+    ).split('\n').slice(-2).join('\n'),
+    '11. last\n    - inner',
+    'and four once the marker is two digits wide',
+  );
+});
+
+test('a stray item keeps its bullet rather than losing the marker', () => {
+  assert.equal(render(doc('<item>orphan</item>')), '- orphan');
+});
+
+/**
+ * The layout Visual Studio's snippet and every style guide produce, and the one
+ * the list handling exists to get right. Two things in it are destructive if the
+ * source layout is passed through: the tags' own line endings land between a
+ * marker and its content, and the XML indent puts that content five spaces past
+ * `1. `, which is one more than CommonMark allows before it becomes an indented
+ * code block inside the item. So inside a list, every line ending and every
+ * indent comes from the tags and none from the source.
+ */
+test('the indented multi-line form is a list, not a code block', () => {
+  assert.equal(
+    render(
+      doc(
+        'Retry policy, in order of preference:',
+        '',
+        '<list type="number">',
+        '  <item>',
+        '    <description>The value on the request.</description>',
+        '  </item>',
+        '  <item>',
+        '    <description>The client default.</description>',
+        '  </item>',
+        '</list>',
+        '',
+        'Anything else throws.',
+      ),
+    ),
+    'Retry policy, in order of preference:\n\n1. The value on the request.\n2. The client default.\n\nAnything else throws.',
+  );
+});
+
+test('a list stays tight however its tags are laid out across lines', () => {
+  assert.equal(
+    render(doc('<list type="bullet">', '<item>', 'a', '</item>', '<item>', 'b', '</item>', '</list>')),
+    '- a\n- b',
+  );
+  // A blank line inside a list would be read as a new block at the top level,
+  // which ends the list rather than spacing it out, so the paragraph break is
+  // what gets dropped.
+  assert.equal(
+    render(doc('<list type="bullet">', '<item>One.', '', 'Still one.</item>', '<item>Two.</item>', '</list>')),
+    '- One.\nStill one.\n- Two.',
+  );
+});
+
+test('a list header is a line, not a row, Markdown having no header for a list', () => {
+  assert.equal(
+    render(
+      doc(
+        '<list type="table">',
+        '<listheader><term>Name</term><description>What</description></listheader>',
+        '<item><term>A</term><description>alpha</description></item>',
+        '</list>',
+      ),
+    ),
+    '**Name**: What\n- **A**: alpha',
+    'and the tag itself never reaches the reader',
+  );
+});
+
+test('a code element that names its language is labelled with it', () => {
+  assert.equal(
+    render(doc('<code language="xml">', '&lt;Project Sdk="Microsoft.NET.Sdk" /&gt;', '</code>'), CSHARP),
+    '```xml\n<Project Sdk="Microsoft.NET.Sdk" />\n```',
+    'the element wins over the configured default',
+  );
+  assert.equal(
+    render(doc('<code lang="powershell">', 'ls', '</code>'), CSHARP),
+    '```powershell\nls\n```',
+    'lang is the spelling people write; language is the one the schemas use',
+  );
+  assert.equal(
+    render(doc('<code language="c++ 11">', 'x', '</code>'), CSHARP),
+    '```\nx\n```',
+    'an unusable label leaves the fence bare rather than falling back to csharp, which would be the wrong grammar rather than none',
+  );
+});
+
 test('a self-closing section tag emits nothing and is not an open tag', () => {
   assert.equal(
     render(['/// Ours.', '/// <inheritdoc/>', '/// Also ours.', 'void M();'].join('\n')),
