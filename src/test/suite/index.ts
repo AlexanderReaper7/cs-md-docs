@@ -136,6 +136,32 @@ export async function run(): Promise<void> {
     assert.match(text, /^> - the `softwareId` at byte 3$/m, `a bullet was mangled:\n${text}`);
   });
 
+  await check('every alert gets a title, an icon and its own colour', async () => {
+    const text = await hoverText(document, at('Alerts'));
+    const alerts = [
+      ['note', 'info', 'Note'],
+      ['tip', 'light-bulb', 'Tip'],
+      ['important', 'comment', 'Important'],
+      ['warning', 'alert', 'Warning'],
+      ['caution', 'stop', 'Caution'],
+    ];
+    for (const [kind, icon, label] of alerts) {
+      const color = `<span style="color:var\\(--vscode-markdownAlert-${kind}-foreground\\);">`;
+      assert.match(
+        text,
+        new RegExp(`^${color}▌</span>&nbsp;${color}<span class="codicon codicon-${icon}"></span> \\*\\*${label}\\*\\*</span><br>\\r?$`, 'm'),
+        `the ${kind} alert lost its bar, icon, label or colour:\n${text}`,
+      );
+    }
+    // Nothing downstream draws `[!TODO]`, so it is quoted prose and takes the
+    // blockquote's own colour rather than an alert's.
+    assert.match(
+      text,
+      /^<span style="color:var\(--vscode-textBlockQuote-border\);">▌<\/span>&nbsp;\[!TODO\]/m,
+      `an unknown name was drawn as an alert:\n${text}`,
+    );
+  });
+
   await check('an unlabelled code block is labelled, so the hover tokenizes it', async () => {
     const text = await hoverText(document, at('Grouped'));
     assert.match(text, /```csharp\r?\ndev\.Send\(frame\);\r?\n```/, `the fence is unlabelled:\n${text}`);
@@ -270,13 +296,35 @@ async function activateCSharp(document: vscode.TextDocument): Promise<void> {
   const position = document.positionAt(offset + 1);
   const deadline = Date.now() + 6 * 60_000;
   let lastSeen = '';
+  let hovering = false;
   while (Date.now() < deadline) {
-    lastSeen = await hoverText(document, position);
-    if (lastSeen.includes('This sentence is tagged')) {
-      console.log('  Roslyn is answering hovers');
-      return;
+    if (!hovering) {
+      lastSeen = await hoverText(document, position);
+      hovering = lastSeen.includes('This sentence is tagged');
+      if (hovering) {
+        console.log('  Roslyn is answering hovers');
+      }
+    }
+    // Two signals, because they arrive apart. Hovers come from the open document
+    // and answer within seconds; the workspace symbol index is built from the
+    // whole project and lags them, so a suite that waits only for the first asks
+    // for a symbol that is not there yet and reads an empty list as a broken
+    // link. Observed on a warm machine, 2026-08-07: hovers at 4s, symbols later.
+    if (hovering) {
+      const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+        'vscode.executeWorkspaceSymbolProvider',
+        'Tagged',
+      );
+      if ((symbols ?? []).length > 0) {
+        console.log('  Roslyn is answering workspace symbol queries');
+        return;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
-  throw new Error(`Roslyn never answered a hover within 6 minutes. Last reply:\n${lastSeen}`);
+  throw new Error(
+    hovering
+      ? 'Roslyn answered hovers but never indexed a workspace symbol within 6 minutes.'
+      : `Roslyn never answered a hover within 6 minutes. Last reply:\n${lastSeen}`,
+  );
 }

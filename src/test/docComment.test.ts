@@ -468,7 +468,6 @@ test('a quote keeps its marker when the marker is what groups the content', () =
     ['> # Wire format', '>', '> Six bytes.'],
     ['> | byte | meaning |', '> |---|---|', '> | 3 | id |'],
     ['> Quoting the spec:', '>', '>> Never match by arrival order.'],
-    ['> [!NOTE]', '>', '> Matched by softwareId.'],
     ['> Verbatim:', '>', '>     dev.Send(frame);'],
   ];
   for (const block of grouping) {
@@ -501,14 +500,111 @@ test('the bar never lands in front of something that opens a block', () => {
   }
 });
 
-test('a GitHub alert gets no bar at all, because VS Code draws its own', () => {
-  assert.equal(render(doc('> [!NOTE]', '> Matched by softwareId.'), STYLED), '> [!NOTE]\n> Matched by softwareId.');
-  // Including on a second paragraph, where the bar would otherwise land inside
-  // the border VS Code has already drawn from `data-severity`.
+/**
+ * The alert is drawn here because nothing downstream will draw it: the parser is
+ * behind `MarkdownString.supportAlertSyntax`, proposed API a published extension
+ * cannot ask for, and the `border-left` that would consume `data-severity` is
+ * scoped to chat and comment threads. Measured against 1.132.0.
+ */
+const ALERTS: readonly [name: string, icon: string, label: string][] = [
+  ['NOTE', 'info', 'Note'],
+  ['TIP', 'light-bulb', 'Tip'],
+  ['IMPORTANT', 'comment', 'Important'],
+  ['WARNING', 'alert', 'Warning'],
+  ['CAUTION', 'stop', 'Caution'],
+];
+
+/** The bar and the title as the sanitizer must see them, for one alert kind. */
+function alert(name: string, icon: string, label: string): { bar: string; title: string } {
+  const color = `var(--vscode-markdownAlert-${name.toLowerCase()}-foreground)`;
+  return {
+    bar: `<span style="color:${color};">▌</span>&nbsp;`,
+    title: `<span style="color:${color};"><span class="codicon codicon-${icon}"></span> **${label}**</span>`,
+  };
+}
+
+test('every alert VS Code knows gets its icon, its name and its own colour', () => {
+  for (const [name, icon, label] of ALERTS) {
+    const { bar, title } = alert(name, icon, label);
+    assert.equal(
+      render(doc(`> [!${name}]`, '> Matched by softwareId.'), STYLED),
+      `${bar}${title}<br>\nMatched by softwareId.`,
+      `alert ${name}`,
+    );
+  }
+});
+
+test('the alert name is matched case-insensitively, and the label is normalised', () => {
+  const { bar, title } = alert('TIP', 'light-bulb', 'Tip');
+  assert.equal(render(doc('> [!tip]', '> Use a fence.'), STYLED), `${bar}${title}<br>\nUse a fence.`);
+});
+
+test('a second paragraph of an alert gets a bar in the alert colour, not the quote colour', () => {
+  const { bar, title } = alert('WARNING', 'alert', 'Warning');
   assert.equal(
     render(doc('> [!WARNING]', '> First.', '>', '> Second.'), STYLED),
-    '> [!WARNING]\n> First.\n>\n> Second.',
+    `${bar}${title}<br>\nFirst.\n\n${bar}Second.`,
   );
+});
+
+test('the break is only there when a body line runs on into the title', () => {
+  const { bar, title } = alert('NOTE', 'info', 'Note');
+  // Nothing to separate: a title alone, and a title followed by a blank quoted
+  // line, are each their own paragraph already.
+  assert.equal(render(doc('> [!NOTE]'), STYLED), `${bar}${title}`);
+  assert.equal(render(doc('> [!NOTE]', '>', '> Matched by softwareId.'), STYLED), `${bar}${title}\n\n${bar}Matched by softwareId.`);
+});
+
+test('text written after the marker stays on the title line', () => {
+  const { bar, title } = alert('IMPORTANT', 'comment', 'Important');
+  assert.equal(render(doc('> [!IMPORTANT] read this first'), STYLED), `${bar}${title} read this first`);
+});
+
+test('an alert whose body needs grouping keeps its markers and its title', () => {
+  const { bar, title } = alert('CAUTION', 'stop', 'Caution');
+  assert.equal(
+    render(doc('> [!CAUTION]', '>', '> - never by arrival order', '> - never by length'), STYLED),
+    `> ${bar}${title}\n>\n> - never by arrival order\n> - never by length`,
+  );
+});
+
+test('a name no renderer knows is prose, not an alert', () => {
+  // `[!TODO]` draws no alert anywhere downstream, so drawing a title for it here
+  // would invent a construct. It is quoted text, and gets the quote's own bar.
+  assert.equal(render(doc('> [!TODO]', '> Wire the retry.'), STYLED), `${BAR}[!TODO]\nWire the retry.`);
+});
+
+test('a marker below the first line is prose, where VS Code would not look for one', () => {
+  assert.equal(
+    render(doc('> Two kinds:', '> [!NOTE] not a title here'), STYLED),
+    `${BAR}Two kinds:\n[!NOTE] not a title here`,
+  );
+});
+
+test('a nested quote is not an alert, its first paragraph being one level down', () => {
+  // Prose, so it keeps the marker that holds the nesting and takes the ordinary
+  // quote bar. The marker text is left where the author wrote it.
+  assert.equal(
+    render(doc('>> [!NOTE]', '>> Matched by softwareId.'), STYLED),
+    `>> ${BAR}[!NOTE]\n>> Matched by softwareId.`,
+  );
+});
+
+test('hoverStyling off leaves an alert as portable Markdown', () => {
+  assert.equal(
+    render(doc('> [!NOTE]', '> Matched by softwareId.')),
+    '> [!NOTE]\n> Matched by softwareId.',
+  );
+});
+
+test('an alert title never lands in front of something that opens a block', () => {
+  for (const [name] of ALERTS) {
+    assert.doesNotMatch(
+      render(doc(`> [!${name}]`, '>', '> - a list', '> - of two'), STYLED),
+      BAR_THEN_BLOCK,
+      `in ${name}`,
+    );
+  }
 });
 
 test('two quotes are decided independently', () => {

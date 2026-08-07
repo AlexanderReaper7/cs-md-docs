@@ -15,7 +15,8 @@ First release.
 - Cross-file resolution through the C# definition provider, so hovering a call site documents the declaration. Falls back to the line under the cursor when the language server has not answered within `csMdDocs.definitionTimeoutMs`.
 - Intra-doc links in rustdoc's spelling: `` [`Device.Send`] `` and `[the sender](Device.Send)` become links that jump to the symbol via the workspace symbol provider. `<see cref="..."/>` resolves down the same path.
 - Inline XML elements translated to Markdown: `<c>`, `<code>`, `<see>`, `<a>`, `<paramref>`, `<typeparamref>`, `<para>`, `<br>`, `<b>`, `<i>`, `<list>`/`<item>`/`<term>`.
-- Hover decoration for the two constructs the hover stylesheet does not style: a themed bar in place of a blockquote's browser-default 40px indent, and entity padding in table cells. Uses the only inline markup the hover sanitizer accepts.
+- Hover decoration for the constructs the hover stylesheet does not style: a themed bar in place of a blockquote's browser-default 40px indent, and entity padding in table cells. Uses the only inline markup the hover sanitizer accepts.
+- GitHub alerts, all five of `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` and `[!CAUTION]`, drawn with the colour and codicon VS Code uses for each. A hover cannot get them any other way: the renderer's own alert parser is behind `MarkdownString.supportAlertSyntax`, which is proposed API, and the `border-left` it would draw is scoped to chat and comment threads.
 - `csMdDocs.defaultCodeLanguage`, defaulting to `csharp`, so a fence written without a language is syntax highlighted rather than grey.
 - Settings for the rest: `enable`, `crossFile`, `definitionTimeoutMs`, `skipWhenTagged`, `demoteHeadings`, `hoverStyling`, `symbolLinks`, `heading`.
 

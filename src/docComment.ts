@@ -795,8 +795,28 @@ const CELL_PAD = '&nbsp;';
 /** Blockquote markers, however deeply nested, and the content after them. */
 const QUOTE_LINE = /^( {0,3}(?:>[ \t]?)+)(.*)$/;
 
-/** A GitHub alert. VS Code renders the title itself, so the quote is already spoken for. */
-const ALERT = /^\[![A-Za-z]+\]/;
+/**
+ * A GitHub alert, and the codicon VS Code draws for it. Copied from its own map
+ * in `workbench.desktop.main.js` so a hover reads like chat does.
+ *
+ * These five names and no others, because they are the only ones anything
+ * downstream has heard of: `[!TODO]` is not an alert to VS Code, and treating it
+ * as one here would draw a title for a construct no renderer agrees exists.
+ */
+const ALERTS: Record<string, string> = {
+  note: 'info',
+  tip: 'light-bulb',
+  important: 'comment',
+  warning: 'alert',
+  caution: 'stop',
+};
+
+/**
+ * The alert marker, which is only a marker on the first line of the quote. VS
+ * Code's own parser matches the first text token of the first paragraph, so a
+ * `[!NOTE]` further down is prose there and is prose here.
+ */
+const ALERT = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*/i;
 
 /**
  * A table's delimiter row. Recognised rather than assumed, because it is the only
@@ -860,6 +880,26 @@ function decorate(markdown: string): string {
 }
 
 /**
+ * The title line of an alert: the icon, the name, and whatever the author wrote
+ * after the marker on the same line, all in the alert's own colour.
+ *
+ * The colour token is a registered workbench colour, so it satisfies the
+ * sanitizer's `var\(--vscode(-[a-zA-Z0-9]+)+\)`, and the codicon inherits it:
+ * `.monaco-hover .markdown-hover .hover-contents .codicon` is
+ * `color:inherit;font-size:inherit`. Bold is Markdown rather than CSS, there
+ * being no `font-weight` in the style allow-list.
+ */
+function alertTitle(kind: string, trailing: string): string {
+  const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+  const icon = `<span class="codicon codicon-${ALERTS[kind]}"></span>`;
+  return tinted(`${icon} **${label}**`, alertColor(kind)) + (trailing ? ` ${trailing}` : '');
+}
+
+function alertColor(kind: string): string {
+  return `markdownAlert-${kind}-foreground`;
+}
+
+/**
  * Rewrite one blockquote, the run of quoted lines `[start, end)`.
  *
  * Two decisions, both taken for the whole quote so a quote cannot be half one
@@ -869,28 +909,56 @@ function decorate(markdown: string): string {
  *   is no `.monaco-hover blockquote` rule, so the element arrives with the browser
  *   default `margin-inline: 40px` and gives up 80px of a ~484px hover. VS Code's
  *   own blockquote, in chat, offsets 15px and takes nothing off the right.
- * - Whether to draw a bar at all. A GitHub alert already has one, drawn by VS Code
- *   from the `data-severity` the renderer puts on the element.
+ * - Whether the quote is an alert, in which case the marker line becomes a title
+ *   and the bar takes the alert's colour instead of the blockquote's.
+ *
+ * The alert is drawn here rather than left to VS Code, and that is a correction
+ * rather than a preference. Measured against 1.132.0: the alert parser is behind
+ * `MarkdownString.supportAlertSyntax`, which is proposed API
+ * (`vscode.proposed.markdownAlertSyntax.d.ts`, microsoft/vscode#209652) and so
+ * unreachable from a published extension. Left alone, `> [!NOTE]` reaches the
+ * reader as a blockquote with the literal text `[!NOTE]` in it. And even with the
+ * flag on, `blockquote[data-severity=note]` only redefines
+ * `--vscode-textBlockQuote-border`; the 5px `border-left` that consumes it exists
+ * under `.interactive-item-container` and `.review-widget` and nowhere near a
+ * hover, so the bar would still have to come from here.
  */
 function decorateQuote(lines: string[], start: number, end: number): void {
   const parts = lines.slice(start, end).map((line) => QUOTE_LINE.exec(line)!);
-  const prose = parts.map((_, k) => isProse(parts, k));
+  const markers = parts.map((part) => part[1]);
+  const contents = parts.map((part) => part[2]);
+
+  // Depth one only: a `>>` first line is a nested quote, whose own first
+  // paragraph is where a parser would look for the marker.
+  const marker = depth(markers[0]) === 1 ? ALERT.exec(contents[0].trim()) : null;
+  const kind = marker?.[1].toLowerCase();
+  if (kind) {
+    // Rewritten before anything else looks at the line, so the rest of this
+    // function sees the paragraph the title has become rather than the marker.
+    const trailing = contents[0].trim().slice(marker![0].length);
+    const runsOn = contents[1] !== undefined && contents[1].trim() !== '';
+    contents[0] = alertTitle(kind, trailing) + (runsOn ? '<br>' : '');
+  }
+  const themeColor = kind ? alertColor(kind) : 'textBlockQuote-border';
+
+  const prose = contents.map((_, k) => isProse(contents, k));
   // A blank quoted line separates paragraphs and groups nothing, so it does not
   // count against flattening even though it is not prose either.
-  const flatten = parts.every(
-    (part, k) => (prose[k] || part[2].trim() === '') && (part[1].match(/>/g) ?? []).length === 1,
+  const flatten = contents.every(
+    (content, k) => (prose[k] || content.trim() === '') && depth(markers[k]) === 1,
   );
-  const bars = !parts.some((part) => ALERT.test(part[2].trim()));
 
   for (let k = 0; k < parts.length; k++) {
-    const [, marker, content] = parts[k];
     // One bar per paragraph, not per line: consecutive quoted lines are a single
     // soft-wrapped paragraph, and a bar on each would land mid-sentence.
-    const opens = k === 0 || parts[k - 1][2].trim() === '';
-    const bar =
-      bars && opens && prose[k] ? `${tinted(QUOTE_BAR, 'textBlockQuote-border')}&nbsp;` : '';
-    lines[start + k] = flatten ? bar + content : marker + bar + content;
+    const opens = k === 0 || contents[k - 1].trim() === '';
+    const bar = opens && prose[k] ? `${tinted(QUOTE_BAR, themeColor)}&nbsp;` : '';
+    lines[start + k] = flatten ? bar + contents[k] : markers[k] + bar + contents[k];
   }
+}
+
+function depth(marker: string): number {
+  return (marker.match(/>/g) ?? []).length;
 }
 
 /** A CommonMark leaf block that opens on its own first characters. */
@@ -911,13 +979,12 @@ const BLOCK_OPENER =
  * A table row is recognised by the delimiter beneath it rather than by containing
  * a pipe, so prose with a pipe in it is still prose.
  */
-function isProse(parts: readonly RegExpExecArray[], k: number): boolean {
-  const content = parts[k][2];
-  const below = parts[k + 1]?.[2];
+function isProse(contents: readonly string[], k: number): boolean {
+  const content = contents[k];
+  const below = contents[k + 1];
   return (
     content.trim() !== '' &&
     !BLOCK_OPENER.test(content) &&
-    !ALERT.test(content.trim()) &&
     !isTableDelimiter(content) &&
     !(below !== undefined && isTableDelimiter(below))
   );

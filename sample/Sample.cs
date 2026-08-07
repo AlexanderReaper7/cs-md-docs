@@ -67,6 +67,33 @@ public sealed class Device
     public void Grouped() { }
 
     /// This sentence is untagged, so only cs-md-docs shows it.
+    ///
+    /// All five, because each carries its own colour and its own codicon, and a
+    /// sixth that is not an alert to any renderer and has to stay quoted prose.
+    ///
+    /// > [!NOTE]
+    /// > A reply is matched by `softwareId`, never by arrival order.
+    ///
+    /// > [!TIP]
+    /// > Prose written outside the tags renders as Markdown; prose inside a
+    /// > `<summary>` is escaped by Roslyn and arrives as literal text.
+    ///
+    /// > [!IMPORTANT]
+    /// > Write `&lt;`. A raw `<` costs the member its whole entry in the
+    /// > generated XML file, `&lt;param&gt;` sections and all.
+    ///
+    /// > [!WARNING]
+    /// > The Marketplace has no undo. A published version can only be superseded.
+    ///
+    /// > [!CAUTION]
+    /// > Never set `isTrusted` to true: a doc comment is free to write a
+    /// > `command:` link, and trust is what decides whether it runs.
+    ///
+    /// > [!TODO]
+    /// > Not an alert to VS Code, so it stays an ordinary quote.
+    public void Alerts() { }
+
+    /// This sentence is untagged, so only cs-md-docs shows it.
     /// Pairs with [`Device.Tagged`], and [the untagged one](Device.Untagged).
     /// An ordinary [note] and a [link](https://example.com/x) are left alone.
     public void Referencing() { }
@@ -80,6 +107,7 @@ public sealed class Device
         PastAnAttribute();
         RustShaped();
         Grouped();
+        Alerts();
         Referencing();
     }
 }

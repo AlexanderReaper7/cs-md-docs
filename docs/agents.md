@@ -79,7 +79,16 @@ Standard CommonMark, as understood by the renderer VS Code bundles.
 
 **Tables.** Cells are padded automatically. The hover is about 484px wide, so keep them to two or three narrow columns.
 
-**Blockquotes.** A quote of pure prose renders as a coloured bar rather than an indented block, because a real `blockquote` gives up 80px of that 484 to the browser's default margin. A quote containing a list, a fence, a heading, a table or a nested quote keeps its `>` markers, since that is what holds the construct inside the quote. Both cases are automatic. GitHub alerts (`> [!NOTE]`, `> [!WARNING]`) work and get VS Code's own styling.
+**Blockquotes.** A quote of pure prose renders as a coloured bar rather than an indented block, because a real `blockquote` gives up 80px of that 484 to the browser's default margin. A quote containing a list, a fence, a heading, a table or a nested quote keeps its `>` markers, since that is what holds the construct inside the quote. Both cases are automatic.
+
+**Alerts.** The five GitHub alerts render with their own colour, icon and title:
+
+```csharp
+/// > [!WARNING]
+/// > Never match a reply by arrival order.
+```
+
+`NOTE`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`, and only those five: any other name inside the brackets is quoted prose, here and on GitHub. The marker has to be the quote's first line. Everything after it is an ordinary quote, so a list or a fence under an alert keeps its `>` markers.
 
 **Inline code spans** with backticks. Note that a code span is *never* syntax highlighted, in any VS Code hover, by any extension: there is no tokenizer on that path. Use a fenced block when the colour matters.
 
