@@ -87,7 +87,9 @@ export async function run(): Promise<void> {
 
   await check('inline tags become Markdown', async () => {
     const text = await hoverText(document, at('Mixed'));
-    assert.match(text, /`Sample\.Device\.Tagged`/);
+    // A cref is a symbol reference like any other, so it is clickable, not a dead
+    // code span. `<c>` is formatting and stays one.
+    assert.match(text, /\[`Sample\.Device\.Tagged`\]\(command:csMdDocs\.goToSymbol\?/);
     assert.match(text, /`List<int>`/);
   });
 
@@ -104,8 +106,79 @@ export async function run(): Promise<void> {
   await check('headings are demoted and block Markdown survives', async () => {
     const text = await hoverText(document, at('RustShaped'));
     assert.match(text, /^### Examples$/m);
-    assert.match(text, /^> A blockquote survives/m);
-    assert.match(text, /^\| 3 \| `softwareId` \|$/m);
+    assert.match(text, /A blockquote survives/);
+    assert.match(text, /^\|.*3.*\|.*`softwareId`.*\|$/m);
+  });
+
+  await check('the styling budget is spent where the stylesheet is silent', async () => {
+    const text = await hoverText(document, at('RustShaped'));
+    // Matched exactly, because the sanitizer's allow-list tests the attribute
+    // against a regex: a space after the colon, or a missing semicolon, and the
+    // whole thing is dropped without a word. The `>` is gone with it: the bar is
+    // the blockquote now, and the element only contributed 40px of browser default.
+    assert.match(
+      text,
+      /^<span style="color:var\(--vscode-textBlockQuote-border\);">▌<\/span>&nbsp;A blockquote survives/m,
+      `the quote bar is missing, malformed, or still indented:\n${text}`,
+    );
+    assert.match(text, /^\|&nbsp;byte&nbsp;\|&nbsp;meaning&nbsp;\|$/m, `table cells are unpadded:\n${text}`);
+  });
+
+  await check('a quote holding a list keeps the marker that groups it', async () => {
+    const text = await hoverText(document, at('Grouped'));
+    assert.match(
+      text,
+      /^> <span style="color:var\(--vscode-textBlockQuote-border\);">▌<\/span>&nbsp;Two things matter:$/m,
+      `the intro line lost its marker or its bar:\n${text}`,
+    );
+    // The bullets keep the marker and their own first character. A bar in front of
+    // one would stop it being a list item at all.
+    assert.match(text, /^> - the `softwareId` at byte 3$/m, `a bullet was mangled:\n${text}`);
+  });
+
+  await check('every alert gets a title, an icon and its own colour', async () => {
+    const text = await hoverText(document, at('Alerts'));
+    const alerts = [
+      ['note', 'info', 'Note'],
+      ['tip', 'light-bulb', 'Tip'],
+      ['important', 'comment', 'Important'],
+      ['warning', 'alert', 'Warning'],
+      ['caution', 'stop', 'Caution'],
+    ];
+    for (const [kind, icon, label] of alerts) {
+      const color = `<span style="color:var\\(--vscode-markdownAlert-${kind}-foreground\\);">`;
+      assert.match(
+        text,
+        new RegExp(`^${color}▌</span>&nbsp;${color}<span class="codicon codicon-${icon}"></span> \\*\\*${label}\\*\\*</span><br>\\r?$`, 'm'),
+        `the ${kind} alert lost its bar, icon, label or colour:\n${text}`,
+      );
+    }
+    // Nothing downstream draws `[!TODO]`, so it is quoted prose and takes the
+    // blockquote's own colour rather than an alert's.
+    assert.match(
+      text,
+      /^<span style="color:var\(--vscode-textBlockQuote-border\);">▌<\/span>&nbsp;\[!TODO\]/m,
+      `an unknown name was drawn as an alert:\n${text}`,
+    );
+  });
+
+  await check('an unlabelled code block is labelled, so the hover tokenizes it', async () => {
+    const text = await hoverText(document, at('Grouped'));
+    assert.match(text, /```csharp\r?\ndev\.Send\(frame\);\r?\n```/, `the fence is unlabelled:\n${text}`);
+  });
+
+  await check('HTML is enabled, or the bar renders as literal text', async () => {
+    const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+      'vscode.executeHoverProvider',
+      document.uri,
+      at('RustShaped'),
+    );
+    const ours = (hovers ?? [])
+      .flatMap((hover) => hover.contents)
+      .filter((content): content is vscode.MarkdownString => content instanceof vscode.MarkdownString)
+      .find((content) => content.value.includes('A blockquote survives'));
+    assert.ok(ours, 'our contribution is not in the hover at all');
+    assert.equal(ours.supportHtml, true, 'the span would be shown as source, not rendered');
   });
 
   await check('intra-doc links become command links', async () => {
@@ -223,13 +296,35 @@ async function activateCSharp(document: vscode.TextDocument): Promise<void> {
   const position = document.positionAt(offset + 1);
   const deadline = Date.now() + 6 * 60_000;
   let lastSeen = '';
+  let hovering = false;
   while (Date.now() < deadline) {
-    lastSeen = await hoverText(document, position);
-    if (lastSeen.includes('This sentence is tagged')) {
-      console.log('  Roslyn is answering hovers');
-      return;
+    if (!hovering) {
+      lastSeen = await hoverText(document, position);
+      hovering = lastSeen.includes('This sentence is tagged');
+      if (hovering) {
+        console.log('  Roslyn is answering hovers');
+      }
+    }
+    // Two signals, because they arrive apart. Hovers come from the open document
+    // and answer within seconds; the workspace symbol index is built from the
+    // whole project and lags them, so a suite that waits only for the first asks
+    // for a symbol that is not there yet and reads an empty list as a broken
+    // link. Observed on a warm machine, 2026-08-07: hovers at 4s, symbols later.
+    if (hovering) {
+      const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+        'vscode.executeWorkspaceSymbolProvider',
+        'Tagged',
+      );
+      if ((symbols ?? []).length > 0) {
+        console.log('  Roslyn is answering workspace symbol queries');
+        return;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
-  throw new Error(`Roslyn never answered a hover within 6 minutes. Last reply:\n${lastSeen}`);
+  throw new Error(
+    hovering
+      ? 'Roslyn answered hovers but never indexed a workspace symbol within 6 minutes.'
+      : `Roslyn never answered a hover within 6 minutes. Last reply:\n${lastSeen}`,
+  );
 }

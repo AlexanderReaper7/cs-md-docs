@@ -8,14 +8,45 @@
     "type": "git",
     "url": "https://github.com/AlexanderReaper7/cs-md-docs.git"
   },
+  "homepage": "https://github.com/AlexanderReaper7/cs-md-docs#readme",
+  "bugs": {
+    "url": "https://github.com/AlexanderReaper7/cs-md-docs/issues"
+  },
   "private": true,
   "license": "MIT",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#181818",
+    "theme": "dark"
+  },
+  "pricing": "Free",
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
     "Programming Languages"
   ],
+  "keywords": [
+    "csharp",
+    "markdown",
+    "documentation",
+    "hover",
+    "xmldoc",
+    "rustdoc",
+    "intellisense"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Hovers are registered for the file, untitled and notebook-cell schemes, so a workspace opened over a virtual file system gets nothing. Symbol links additionally need the C# language server, which does not run on the web."
+    }
+  },
   "activationEvents": [
     "onLanguage:csharp"
   ],
@@ -49,6 +80,16 @@
           "default": 2,
           "description": "Push every Markdown heading down by this many levels. Rust puts '# Examples' at the top level, which in a hover popup is a title larger than the signature beneath it. Set to 0 to render headings as written."
         },
+        "csMdDocs.hoverStyling": {
+          "type": "boolean",
+          "default": true,
+          "description": "Compensate for the hover stylesheet, which styles paragraphs, lists, headings, code and rules but leaves blockquotes and tables to the browser default. Adds a themed bar to a quote and padding to table cells, using the only inline markup the hover sanitizer accepts. Off keeps the output portable Markdown and disables HTML in the hover."
+        },
+        "csMdDocs.defaultCodeLanguage": {
+          "type": "string",
+          "default": "csharp",
+          "description": "Language to label a code fence that was written without one, so it is syntax highlighted rather than grey. Applies to a <code> element and to a bare ``` fence. Empty leaves them unlabelled; a value containing anything but letters, digits, +, # or - is ignored."
+        },
         "csMdDocs.symbolLinks": {
           "type": "boolean",
           "default": true,
@@ -70,6 +111,8 @@
     "test:e2e": "npm run compile && node out/test/runTests.js",
     "deploy": "pwsh -NoProfile -File scripts/deploy.ps1",
     "package": "pwsh -NoProfile -File scripts/deploy.ps1 -NoInstall",
+    "check-release": "node scripts/check-release.mjs",
+    "icon": "uv run --with resvg-py scripts/make-icon.py",
     "hooks": "node scripts/install-hooks.mjs",
     "prepare": "node scripts/install-hooks.mjs"
   },
@@ -78,6 +121,7 @@
     "@types/vscode": "^1.90.0",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
+    "ovsx": "^1.1.0",
     "typescript": "^5.7.2"
   }
 }

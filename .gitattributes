@@ -4,3 +4,10 @@
 # this pins what a fresh clone gets rather than changing anything now.
 .githooks/** text eol=lf
 *.sh text eol=lf
+
+# Explicit, rather than trusting the heuristic: with core.autocrlf true a file
+# that guesses wrong is corrupted on checkout, and the icon is regenerated rarely
+# enough that nobody would connect the breakage to the commit that caused it.
+# Review images/icon.svg, which is the source, and regenerate this with
+# `npm run icon` rather than trying to read the diff.
+*.png binary

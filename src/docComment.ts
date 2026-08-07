@@ -79,6 +79,14 @@ const SYMBOL_PATH = /^[A-Za-z_]\w*(?:(?:\.|::)[A-Za-z_]\w*)*$/;
 const ATTRIBUTE_LINE = /^\s*\[[^\]]*\]\s*$/;
 const PREPROCESSOR_LINE = /^\s*#/;
 
+/**
+ * A language id we are willing to write into a fence. `csharp`, `c#` and `f#` all
+ * pass; anything with a backtick, a tilde or a space would close the fence it was
+ * meant to label, or split into an info string plus arguments. Checked here rather
+ * than at the caller so no setting value can make this module emit a broken fence.
+ */
+const LANGUAGE_ID = /^[\w+#-]+$/;
+
 /** How far above a declaration we will look past attributes and blank lines. */
 const MAX_SKIPPED_LINES = 8;
 
@@ -102,6 +110,30 @@ export interface RenderOptions {
    * the module stays usable with no editor attached.
    */
   symbolLink?: (path: string) => string | undefined;
+  /**
+   * Info string for a fence that was opened without one, so it is tokenized
+   * instead of arriving grey. Empty or absent leaves a bare fence bare.
+   *
+   * rust-analyzer sets no such default: it writes ```` ```rust ```` explicitly on
+   * every block it generates and passes an author's fence through untouched, so a
+   * bare fence in a rustdoc comment is unhighlighted there too, even though
+   * rustdoc's own convention is that a bare fence is Rust. The language of the
+   * file is a better guess than nothing, and the setting turns it off.
+   */
+  defaultCodeLanguage?: string;
+  /**
+   * Decorate the output with the sliver of inline markup a VS Code hover both
+   * renders and styles. Off by default, because the result is no longer portable
+   * Markdown: it is Markdown aimed at one renderer.
+   *
+   * The hover stylesheet has rules for `p`, `ul`, `ol`, `li`, `h1`-`h6`, `code`
+   * and `hr`, and for nothing else, so a blockquote arrives with the browser's
+   * 40px indent and no bar, and a table with neither rules nor cell padding.
+   * Extensions cannot add CSS to a hover, and the sanitizer's allow-list permits
+   * only `color`, `background-color` and `border-radius`, and only on a `span`.
+   * A coloured bar glyph and entity padding are therefore the whole repertoire.
+   */
+  hoverStyling?: boolean;
 }
 
 /**
@@ -230,6 +262,7 @@ export function extractUntagged(
     linkStack: [],
   };
   const demote = options.demoteHeadings ?? 0;
+  const language = fenceLanguage(options.defaultCodeLanguage);
   let buf = '';
 
   const emitter: Emitter = {
@@ -280,7 +313,10 @@ export function extractUntagged(
       }
       if (fence) {
         state.mdFence = { char: fence.char, length: fence.length };
-        buf += raw + '\n';
+        // Only the opening delimiter is labelled. A closing one is reached through
+        // the branch above, and `closes` rejects a delimiter carrying an info
+        // string, so labelling both would leave the fence permanently open.
+        buf += (fence.info === '' ? raw.trimEnd() + language : raw) + '\n';
         continue;
       }
     }
@@ -333,7 +369,13 @@ export function extractUntagged(
         emitText(line.slice(i, tick));
         const span = matchCodeSpan(line, tick);
         if (span) {
-          emitter.raw(span.text);
+          // Decoded, like every other opaque region: CommonMark does not resolve
+          // an entity inside a code span, so `&lt;` written here would reach the
+          // reader as the five characters `&lt;`. And it has to be written here,
+          // because a raw `<` makes csc drop the entire member from the generated
+          // XML file, not merely warn. This is the one spelling that is correct in
+          // both places.
+          emitter.raw(decodeEntities(span.text));
           i = span.end;
         } else {
           emitText('`');
@@ -371,7 +413,7 @@ export function extractUntagged(
           depth = tag.isClose ? Math.max(0, depth - 1) : depth + 1;
         }
       } else if (depth === 0) {
-        applyInlineTag(tag, emitter, state);
+        applyInlineTag(tag, emitter, state, options, language);
       }
       i = lt + m![0].length;
     }
@@ -381,11 +423,21 @@ export function extractUntagged(
     }
   }
 
-  return { markdown: normalize(buf), hadSections };
+  const markdown = normalize(buf);
+  return {
+    markdown: options.hoverStyling ? decorate(markdown) : markdown,
+    hadSections,
+  };
 }
 
 /** Translate one inline element into Markdown, updating the scanner's state. */
-function applyInlineTag(tag: Tag, out: Emitter, state: ScanState): void {
+function applyInlineTag(
+  tag: Tag,
+  out: Emitter,
+  state: ScanState,
+  options: RenderOptions,
+  language: string,
+): void {
   const { name, isClose, isSelfClosing, attrs } = tag;
   switch (name) {
     case 'c':
@@ -399,20 +451,24 @@ function applyInlineTag(tag: Tag, out: Emitter, state: ScanState): void {
         return;
       }
       out.blankLine();
-      out.raw('```');
+      out.raw(isClose ? '```' : '```' + language);
       state.inCodeFence = !isClose;
       return;
 
     case 'see':
     case 'a': {
       const href = attr(attrs, 'href');
+      const cref = attr(attrs, 'cref');
       if (isSelfClosing) {
-        const cref = attr(attrs, 'cref');
         const langword = attr(attrs, 'langword');
         if (href !== undefined) {
           out.raw(`[${href}](${href})`);
         } else if (cref !== undefined) {
-          out.raw(`\`${stripCrefPrefix(cref)}\``);
+          // The XML spelling of what `[`Device.Send`]` spells, so it resolves down
+          // the same path. Roslyn makes a cref clickable; leaving ours a dead code
+          // span made the two spellings of one idea behave differently.
+          const written = stripCrefPrefix(cref);
+          out.raw(renderSymbolLink({ label: `\`${written}\``, path: normalizePath(written) }, options.symbolLink));
         } else if (langword !== undefined) {
           out.raw(`\`${langword}\``);
         }
@@ -422,8 +478,14 @@ function applyInlineTag(tag: Tag, out: Emitter, state: ScanState): void {
         const pending = state.linkStack.pop();
         out.raw(pending ? `](${pending})` : '`');
         state.inCodeSpan = false;
-      } else if (href !== undefined) {
-        state.linkStack.push(href);
+        return;
+      }
+      // `<see cref="X">the sender</see>` gives the link a label of its own, so the
+      // inner text is prose to be escaped rather than a code span.
+      const url =
+        href ?? (cref !== undefined ? options.symbolLink?.(normalizePath(stripCrefPrefix(cref))) : undefined);
+      if (url !== undefined) {
+        state.linkStack.push(url);
         out.raw('[');
       } else {
         state.linkStack.push(null);
@@ -501,6 +563,12 @@ function matchFence(line: string): { char: string; length: number; info: string 
   return { char, length: m[1].length, info: m[2].trim() };
 }
 
+/** The info string to append to an unlabelled fence, or `''` for none. */
+function fenceLanguage(configured: string | undefined): string {
+  const id = (configured ?? '').trim();
+  return LANGUAGE_ID.test(id) ? id : '';
+}
+
 /** A fence closes on the same character, at least as long, and nothing else on the line. */
 function closes(open: Fence, candidate: { char: string; length: number; info: string }): boolean {
   return (
@@ -518,11 +586,15 @@ function demoteHeading(line: string, by: number): string {
   return m[1] + '#'.repeat(Math.min(6, m[2].length + by)) + m[3];
 }
 
-interface SymbolLink {
+/** A reference to render, however it was spelled: `[`X`]`, `[text](X)` or `<see cref="X"/>`. */
+interface Reference {
   /** What the reader sees, backticks and all, exactly as it was written. */
   label: string;
   /** The path to resolve, stripped of generic arguments and parameter lists. */
   path: string;
+}
+
+interface SymbolLink extends Reference {
   /** Index just past the closing delimiter. */
   end: number;
 }
@@ -591,7 +663,7 @@ function normalizePath(text: string): string {
 }
 
 function renderSymbolLink(
-  link: SymbolLink,
+  link: Reference,
   toUrl: RenderOptions['symbolLink'],
 ): string {
   // A backticked label is already a code span and must not be escaped; a bare
@@ -702,4 +774,265 @@ function normalize(markdown: string): string {
   }
 
   return out.join('\n').trim();
+}
+
+// --- Hover decoration --------------------------------------------------------
+//
+// Everything below exists because of what the hover stylesheet does not say. See
+// `RenderOptions.hoverStyling` for the constraints; these are the two constructs
+// that fall through to a browser default and look broken as a result.
+
+/**
+ * U+258C, standing in for the 5px `border-left` VS Code draws on a blockquote in
+ * chat and in a comment thread, and does not draw in a hover. A `span` may carry
+ * a colour and nothing else, so the bar has to be a character.
+ */
+const QUOTE_BAR = '▌';
+
+/** Padding for a table cell. An entity, because marked trims real whitespace out of a cell. */
+const CELL_PAD = '&nbsp;';
+
+/** Blockquote markers, however deeply nested, and the content after them. */
+const QUOTE_LINE = /^( {0,3}(?:>[ \t]?)+)(.*)$/;
+
+/**
+ * A GitHub alert, and the codicon VS Code draws for it. Copied from its own map
+ * in `workbench.desktop.main.js` so a hover reads like chat does.
+ *
+ * These five names and no others, because they are the only ones anything
+ * downstream has heard of: `[!TODO]` is not an alert to VS Code, and treating it
+ * as one here would draw a title for a construct no renderer agrees exists.
+ */
+const ALERTS: Record<string, string> = {
+  note: 'info',
+  tip: 'light-bulb',
+  important: 'comment',
+  warning: 'alert',
+  caution: 'stop',
+};
+
+/**
+ * The alert marker, which is only a marker on the first line of the quote. VS
+ * Code's own parser matches the first text token of the first paragraph, so a
+ * `[!NOTE]` further down is prose there and is prose here.
+ */
+const ALERT = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*/i;
+
+/**
+ * A table's delimiter row. Recognised rather than assumed, because it is the only
+ * line that tells a table apart from prose that happens to contain a pipe.
+ */
+const TABLE_DELIMITER = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+
+/**
+ * Wrap `text` in the only styling the hover sanitizer accepts. The shape is
+ * load-bearing: the allow-list tests the attribute against
+ * `/^(color\:(#[0-9a-fA-F]+|var\(--vscode(-[a-zA-Z0-9]+)+\));)?.../`, so a space
+ * after the colon or a missing semicolon loses the whole attribute silently.
+ */
+function tinted(text: string, themeColor: string): string {
+  return `<span style="color:var(--vscode-${themeColor});">${text}</span>`;
+}
+
+/** Add the bar to every quote, and breathing room to every table cell. */
+function decorate(markdown: string): string {
+  const lines = markdown.split('\n');
+  let fence: Fence | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const delimiter = matchFence(lines[i]);
+    if (fence) {
+      if (delimiter && closes(fence, delimiter)) {
+        fence = null;
+      }
+      continue;
+    }
+    if (delimiter) {
+      fence = { char: delimiter.char, length: delimiter.length };
+      continue;
+    }
+
+    if (isTableDelimiter(lines[i]) && i > 0 && isRow(lines[i - 1])) {
+      lines[i - 1] = padRow(lines[i - 1]);
+      let j = i + 1;
+      while (j < lines.length && isRow(lines[j]) && !isTableDelimiter(lines[j])) {
+        lines[j] = padRow(lines[j]);
+        j++;
+      }
+      // The delimiter row is measurement, not content, and padding it would only
+      // lengthen the dashes nobody sees.
+      i = j - 1;
+      continue;
+    }
+
+    if (QUOTE_LINE.test(lines[i])) {
+      let end = i;
+      while (end < lines.length && QUOTE_LINE.test(lines[end])) {
+        end++;
+      }
+      decorateQuote(lines, i, end);
+      i = end - 1;
+      continue;
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * The title line of an alert: the icon, the name, and whatever the author wrote
+ * after the marker on the same line, all in the alert's own colour.
+ *
+ * The colour token is a registered workbench colour, so it satisfies the
+ * sanitizer's `var\(--vscode(-[a-zA-Z0-9]+)+\)`, and the codicon inherits it:
+ * `.monaco-hover .markdown-hover .hover-contents .codicon` is
+ * `color:inherit;font-size:inherit`. Bold is Markdown rather than CSS, there
+ * being no `font-weight` in the style allow-list.
+ */
+function alertTitle(kind: string, trailing: string): string {
+  const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+  const icon = `<span class="codicon codicon-${ALERTS[kind]}"></span>`;
+  return tinted(`${icon} **${label}**`, alertColor(kind)) + (trailing ? ` ${trailing}` : '');
+}
+
+function alertColor(kind: string): string {
+  return `markdownAlert-${kind}-foreground`;
+}
+
+/**
+ * Rewrite one blockquote, the run of quoted lines `[start, end)`.
+ *
+ * Two decisions, both taken for the whole quote so a quote cannot be half one
+ * thing and half another:
+ *
+ * - Whether the bar replaces the `>` outright. It usually can, and should: there
+ *   is no `.monaco-hover blockquote` rule, so the element arrives with the browser
+ *   default `margin-inline: 40px` and gives up 80px of a ~484px hover. VS Code's
+ *   own blockquote, in chat, offsets 15px and takes nothing off the right.
+ * - Whether the quote is an alert, in which case the marker line becomes a title
+ *   and the bar takes the alert's colour instead of the blockquote's.
+ *
+ * The alert is drawn here rather than left to VS Code, and that is a correction
+ * rather than a preference. Measured against 1.132.0: the alert parser is behind
+ * `MarkdownString.supportAlertSyntax`, which is proposed API
+ * (`vscode.proposed.markdownAlertSyntax.d.ts`, microsoft/vscode#209652) and so
+ * unreachable from a published extension. Left alone, `> [!NOTE]` reaches the
+ * reader as a blockquote with the literal text `[!NOTE]` in it. And even with the
+ * flag on, `blockquote[data-severity=note]` only redefines
+ * `--vscode-textBlockQuote-border`; the 5px `border-left` that consumes it exists
+ * under `.interactive-item-container` and `.review-widget` and nowhere near a
+ * hover, so the bar would still have to come from here.
+ */
+function decorateQuote(lines: string[], start: number, end: number): void {
+  const parts = lines.slice(start, end).map((line) => QUOTE_LINE.exec(line)!);
+  const markers = parts.map((part) => part[1]);
+  const contents = parts.map((part) => part[2]);
+
+  // Depth one only: a `>>` first line is a nested quote, whose own first
+  // paragraph is where a parser would look for the marker.
+  const marker = depth(markers[0]) === 1 ? ALERT.exec(contents[0].trim()) : null;
+  const kind = marker?.[1].toLowerCase();
+  if (kind) {
+    // Rewritten before anything else looks at the line, so the rest of this
+    // function sees the paragraph the title has become rather than the marker.
+    const trailing = contents[0].trim().slice(marker![0].length);
+    const runsOn = contents[1] !== undefined && contents[1].trim() !== '';
+    contents[0] = alertTitle(kind, trailing) + (runsOn ? '<br>' : '');
+  }
+  const themeColor = kind ? alertColor(kind) : 'textBlockQuote-border';
+
+  const prose = contents.map((_, k) => isProse(contents, k));
+  // A blank quoted line separates paragraphs and groups nothing, so it does not
+  // count against flattening even though it is not prose either.
+  const flatten = contents.every(
+    (content, k) => (prose[k] || content.trim() === '') && depth(markers[k]) === 1,
+  );
+
+  for (let k = 0; k < parts.length; k++) {
+    // One bar per paragraph, not per line: consecutive quoted lines are a single
+    // soft-wrapped paragraph, and a bar on each would land mid-sentence.
+    const opens = k === 0 || contents[k - 1].trim() === '';
+    const bar = opens && prose[k] ? `${tinted(QUOTE_BAR, themeColor)}&nbsp;` : '';
+    lines[start + k] = flatten ? bar + contents[k] : markers[k] + bar + contents[k];
+  }
+}
+
+function depth(marker: string): number {
+  return (marker.match(/>/g) ?? []).length;
+}
+
+/** A CommonMark leaf block that opens on its own first characters. */
+const BLOCK_OPENER =
+  /^(?: {4,}|#{1,6}(?:\s|$)|(?:[-*+]|\d{1,9}[.)])(?:\s|$)|`{3,}|~{3,}|(?:-{3,}|\*{3,}|_{3,})\s*$)/;
+
+/**
+ * True when line `k` of the quote is ordinary paragraph text. One predicate, two
+ * uses, because both questions turn on the same property:
+ *
+ * - the bar may only go in front of prose. A span in front of a bullet, a fence,
+ *   a heading or a table row stops the renderer recognising the construct, which
+ *   destroys it rather than decorating it.
+ * - the `>` may only go when every line is prose. That is the only case where the
+ *   marker contributes nothing but the 40px indent; otherwise it is what holds a
+ *   multi-line construct inside the quote.
+ *
+ * A table row is recognised by the delimiter beneath it rather than by containing
+ * a pipe, so prose with a pipe in it is still prose.
+ */
+function isProse(contents: readonly string[], k: number): boolean {
+  const content = contents[k];
+  const below = contents[k + 1];
+  return (
+    content.trim() !== '' &&
+    !BLOCK_OPENER.test(content) &&
+    !isTableDelimiter(content) &&
+    !(below !== undefined && isTableDelimiter(below))
+  );
+}
+
+function isTableDelimiter(line: string): boolean {
+  return line.includes('|') && TABLE_DELIMITER.test(line);
+}
+
+function isRow(line: string): boolean {
+  return splitRow(line).length > 1;
+}
+
+/**
+ * Split on the pipes that separate cells. A backslash escape is the only way to
+ * put a pipe inside a cell, code span or not, so it is the only case to skip.
+ */
+function splitRow(row: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  for (let i = 0; i < row.length; i++) {
+    const ch = row[i];
+    if (ch === '\\' && i + 1 < row.length) {
+      current += ch + row[++i];
+      continue;
+    }
+    if (ch === '|') {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  parts.push(current);
+  return parts;
+}
+
+/**
+ * Pad every cell in a table row. A segment that is blank after trimming is either
+ * the indent before a leading pipe, the tail after a trailing one, or an empty
+ * cell, and none of the three gains anything from padding, so blankness is the
+ * whole test and the outer pipes need no special case.
+ */
+function padRow(row: string): string {
+  return splitRow(row)
+    .map((part) => {
+      const text = part.trim();
+      return text === '' ? part : `${CELL_PAD}${text}${CELL_PAD}`;
+    })
+    .join('|');
 }

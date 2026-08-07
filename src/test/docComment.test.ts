@@ -119,6 +119,22 @@ test('angle brackets inside a user code span stay literal', () => {
   );
 });
 
+/**
+ * The one spelling that is correct on both sides. Measured against the .NET 10
+ * SDK: a raw `<` anywhere in a doc comment, backticks or fence notwithstanding,
+ * makes csc emit CS1570 and replace the member's entry in the generated XML file
+ * with `<!-- Badly formed XML comment ignored -->`. So an author who wants a doc
+ * file has to write `&lt;`. CommonMark, meanwhile, does not resolve entities
+ * inside a code span, so leaving it encoded put the literal text `&lt;` in the
+ * hover. Decoding here is what lets one source satisfy both.
+ */
+test('an entity inside a user code span is decoded, not shown', () => {
+  assert.equal(
+    render(['/// Prefer `Span&lt;byte&gt;` over `T&amp;`.', 'void M();'].join('\n')),
+    'Prefer `Span<byte>` over `T&`.',
+  );
+});
+
 test('inline tags become Markdown', () => {
   assert.equal(
     render(
@@ -236,6 +252,47 @@ test('an inline code span is not mistaken for a fence', () => {
   assert.equal(render(doc('Prefer `dev.Send` here.')), 'Prefer `dev.Send` here.');
 });
 
+// --- The default fence language ----------------------------------------------
+
+const CSHARP: RenderOptions = { defaultCodeLanguage: 'csharp' };
+
+test('an unlabelled fence is labelled, so the hover tokenizes it', () => {
+  assert.equal(render(doc('```', 'dev.Send(frame);', '```'), CSHARP), '```csharp\ndev.Send(frame);\n```');
+  assert.equal(
+    render(['/// <code>', '/// dev.Send(frame);', '/// </code>', 'void M();'].join('\n'), CSHARP),
+    '```csharp\ndev.Send(frame);\n```',
+  );
+});
+
+test('only the opening delimiter is labelled, or the fence would never close', () => {
+  // `closes` rejects a delimiter carrying an info string, so a label on the closing
+  // one would swallow the rest of the comment.
+  assert.equal(
+    render(doc('```', 'dev.Send(frame);', '```', '', 'Still ours.'), CSHARP),
+    '```csharp\ndev.Send(frame);\n```\n\nStill ours.',
+  );
+});
+
+test('a fence the author labelled is left as written', () => {
+  assert.equal(render(doc('```json', '{ "id": 3 }', '```'), CSHARP), '```json\n{ "id": 3 }\n```');
+  assert.equal(render(doc('~~~', 'x', '~~~'), CSHARP), '~~~csharp\nx\n~~~');
+});
+
+test('a language id that would break the fence is ignored', () => {
+  for (const id of ['', '   ', 'c sharp', 'c`sharp', 'js ~~~', undefined]) {
+    assert.equal(
+      render(doc('```', 'x', '```'), { defaultCodeLanguage: id }),
+      '```\nx\n```',
+      `accepted a bad id: ${JSON.stringify(id)}`,
+    );
+  }
+  assert.equal(render(doc('```', 'x', '```'), { defaultCodeLanguage: 'f#' }), '```f#\nx\n```');
+});
+
+test('labelling is opt-in, so the default output stays as written', () => {
+  assert.equal(render(doc('```', 'x', '```')), '```\nx\n```');
+});
+
 // --- Headings ----------------------------------------------------------------
 
 test('headings are demoted so a hover is not dominated by a title', () => {
@@ -317,6 +374,41 @@ test('a reference inside a fence or a code span is not a link', () => {
   assert.equal(render(doc('Literally <c>[Device.Send]</c>.'), LINKS), 'Literally `[Device.Send]`.');
 });
 
+test('a cref is a reference too, and resolves down the same path', () => {
+  assert.equal(
+    render(doc('Calls <see cref="M:Device.Send"/> on the way out.'), LINKS),
+    'Calls [`Device.Send`](goto:Device.Send) on the way out.',
+  );
+});
+
+test('a cref keeps its signature in the label and drops it from the query', () => {
+  assert.equal(
+    render(doc('See <see cref="M:Device.Send(System.Span{System.Byte})"/>.'), LINKS),
+    'See [`Device.Send(System.Span{System.Byte})`](goto:Device.Send).',
+  );
+});
+
+test('a cref with inner text gives the link a label of its own', () => {
+  assert.equal(
+    render(doc('Hand it to <see cref="M:Device.Send">the sender</see>.'), LINKS),
+    'Hand it to [the sender](goto:Device.Send).',
+  );
+  // And the label is prose, so a generic in it still survives the renderer.
+  assert.equal(
+    render(doc('Use <see cref="T:Buffer">a Buffer<int></see>.'), LINKS),
+    'Use [a Buffer&lt;int>](goto:Buffer).',
+  );
+});
+
+test('without a resolver a cref degrades to a code span, as it always did', () => {
+  assert.equal(render(doc('Calls <see cref="M:Device.Send"/>.')), 'Calls `Device.Send`.');
+  assert.equal(render(doc('Calls <see cref="M:Device.Send">it</see>.')), 'Calls `it`.');
+});
+
+test('a langword is a keyword, not a symbol, so it never becomes a link', () => {
+  assert.equal(render(doc('Returns <see langword="null"/> on timeout.'), LINKS), 'Returns `null` on timeout.');
+});
+
 test('a reference inside a section stays with Roslyn', () => {
   assert.equal(render(doc('<summary>Pairs with [Device.Send].</summary>'), LINKS), '');
 });
@@ -342,4 +434,241 @@ test('tables, quotes, nested lists and strikethrough pass through unmangled', ()
   // Identical output: the only angle bracket sits inside a code span, and the
   // pipe, quote and list markers are never touched.
   assert.equal(render(doc(...block)), block.join('\n'));
+});
+
+// --- Hover decoration --------------------------------------------------------
+
+const STYLED: RenderOptions = { hoverStyling: true };
+
+/** The bar as the sanitizer must see it: no space after the colon, semicolon present. */
+const BAR = '<span style="color:var(--vscode-textBlockQuote-border);">▌</span>&nbsp;';
+
+test('a prose quote trades its marker for the bar, once per paragraph', () => {
+  // The `>` goes because nothing depends on it: there is no `.monaco-hover
+  // blockquote` rule, so the element would only contribute the browser's 40px
+  // margin on each side. One bar per paragraph, not per line.
+  assert.equal(
+    render(doc('> Blocks until the reply arrives,', '> which can take a frame.', '>', '> Then returns.'), STYLED),
+    `${BAR}Blocks until the reply arrives,\nwhich can take a frame.\n\n${BAR}Then returns.`,
+  );
+});
+
+/**
+ * What the batch of judgment calls above could break. A bar in front of anything
+ * that opens a block stops the renderer recognising it, so `▌ - item` is not a
+ * decorated list, it is a destroyed one. The bar is matched whole, because the
+ * `&nbsp;` alone also appears as table-cell padding.
+ */
+const BAR_THEN_BLOCK = /<\/span>&nbsp;(?:[-*+>#|]|\d+[.)]|`{3}|~{3}| {4})/;
+
+test('a quote keeps its marker when the marker is what groups the content', () => {
+  const grouping = [
+    ['> Two of them:', '>', '> - the softwareId', '> - the sequence number'],
+    ['> Usage:', '>', '> ```csharp', '> dev.Send(frame);', '> ```'],
+    ['> # Wire format', '>', '> Six bytes.'],
+    ['> | byte | meaning |', '> |---|---|', '> | 3 | id |'],
+    ['> Quoting the spec:', '>', '>> Never match by arrival order.'],
+    ['> Verbatim:', '>', '>     dev.Send(frame);'],
+  ];
+  for (const block of grouping) {
+    const rendered = render(doc(...block), STYLED);
+    for (const line of rendered.split('\n')) {
+      assert.match(line, /^>/, `marker dropped from a grouping quote: ${block[0]}`);
+    }
+    // Every source line survives with its marker and its own first character intact.
+    for (const line of block) {
+      assert.ok(
+        rendered.split('\n').some((out) => out.replace(/<span[^>]*>▌<\/span>&nbsp;/, '') === line),
+        `construct mangled in ${block[0]}: ${line}\ngot:\n${rendered}`,
+      );
+    }
+  }
+});
+
+test('the bar never lands in front of something that opens a block', () => {
+  const blocks = [
+    ['> Two of them:', '>', '> - the softwareId'],
+    ['> | byte | meaning |', '> |---|---|', '> | 3 | id |'],
+    ['> ```', '> dev.Send(frame);', '> ```'],
+    ['> 1. open it', '> 2. send'],
+    ['> # Heading'],
+    ['>     indented code'],
+    ['> Prose.', '>', '> ---'],
+  ];
+  for (const block of blocks) {
+    assert.doesNotMatch(render(doc(...block), STYLED), BAR_THEN_BLOCK, `in ${block[0]}`);
+  }
+});
+
+/**
+ * The alert is drawn here because nothing downstream will draw it: the parser is
+ * behind `MarkdownString.supportAlertSyntax`, proposed API a published extension
+ * cannot ask for, and the `border-left` that would consume `data-severity` is
+ * scoped to chat and comment threads. Measured against 1.132.0.
+ */
+const ALERTS: readonly [name: string, icon: string, label: string][] = [
+  ['NOTE', 'info', 'Note'],
+  ['TIP', 'light-bulb', 'Tip'],
+  ['IMPORTANT', 'comment', 'Important'],
+  ['WARNING', 'alert', 'Warning'],
+  ['CAUTION', 'stop', 'Caution'],
+];
+
+/** The bar and the title as the sanitizer must see them, for one alert kind. */
+function alert(name: string, icon: string, label: string): { bar: string; title: string } {
+  const color = `var(--vscode-markdownAlert-${name.toLowerCase()}-foreground)`;
+  return {
+    bar: `<span style="color:${color};">▌</span>&nbsp;`,
+    title: `<span style="color:${color};"><span class="codicon codicon-${icon}"></span> **${label}**</span>`,
+  };
+}
+
+test('every alert VS Code knows gets its icon, its name and its own colour', () => {
+  for (const [name, icon, label] of ALERTS) {
+    const { bar, title } = alert(name, icon, label);
+    assert.equal(
+      render(doc(`> [!${name}]`, '> Matched by softwareId.'), STYLED),
+      `${bar}${title}<br>\nMatched by softwareId.`,
+      `alert ${name}`,
+    );
+  }
+});
+
+test('the alert name is matched case-insensitively, and the label is normalised', () => {
+  const { bar, title } = alert('TIP', 'light-bulb', 'Tip');
+  assert.equal(render(doc('> [!tip]', '> Use a fence.'), STYLED), `${bar}${title}<br>\nUse a fence.`);
+});
+
+test('a second paragraph of an alert gets a bar in the alert colour, not the quote colour', () => {
+  const { bar, title } = alert('WARNING', 'alert', 'Warning');
+  assert.equal(
+    render(doc('> [!WARNING]', '> First.', '>', '> Second.'), STYLED),
+    `${bar}${title}<br>\nFirst.\n\n${bar}Second.`,
+  );
+});
+
+test('the break is only there when a body line runs on into the title', () => {
+  const { bar, title } = alert('NOTE', 'info', 'Note');
+  // Nothing to separate: a title alone, and a title followed by a blank quoted
+  // line, are each their own paragraph already.
+  assert.equal(render(doc('> [!NOTE]'), STYLED), `${bar}${title}`);
+  assert.equal(render(doc('> [!NOTE]', '>', '> Matched by softwareId.'), STYLED), `${bar}${title}\n\n${bar}Matched by softwareId.`);
+});
+
+test('text written after the marker stays on the title line', () => {
+  const { bar, title } = alert('IMPORTANT', 'comment', 'Important');
+  assert.equal(render(doc('> [!IMPORTANT] read this first'), STYLED), `${bar}${title} read this first`);
+});
+
+test('an alert whose body needs grouping keeps its markers and its title', () => {
+  const { bar, title } = alert('CAUTION', 'stop', 'Caution');
+  assert.equal(
+    render(doc('> [!CAUTION]', '>', '> - never by arrival order', '> - never by length'), STYLED),
+    `> ${bar}${title}\n>\n> - never by arrival order\n> - never by length`,
+  );
+});
+
+test('a name no renderer knows is prose, not an alert', () => {
+  // `[!TODO]` draws no alert anywhere downstream, so drawing a title for it here
+  // would invent a construct. It is quoted text, and gets the quote's own bar.
+  assert.equal(render(doc('> [!TODO]', '> Wire the retry.'), STYLED), `${BAR}[!TODO]\nWire the retry.`);
+});
+
+test('a marker below the first line is prose, where VS Code would not look for one', () => {
+  assert.equal(
+    render(doc('> Two kinds:', '> [!NOTE] not a title here'), STYLED),
+    `${BAR}Two kinds:\n[!NOTE] not a title here`,
+  );
+});
+
+test('a nested quote is not an alert, its first paragraph being one level down', () => {
+  // Prose, so it keeps the marker that holds the nesting and takes the ordinary
+  // quote bar. The marker text is left where the author wrote it.
+  assert.equal(
+    render(doc('>> [!NOTE]', '>> Matched by softwareId.'), STYLED),
+    `>> ${BAR}[!NOTE]\n>> Matched by softwareId.`,
+  );
+});
+
+test('hoverStyling off leaves an alert as portable Markdown', () => {
+  assert.equal(
+    render(doc('> [!NOTE]', '> Matched by softwareId.')),
+    '> [!NOTE]\n> Matched by softwareId.',
+  );
+});
+
+test('an alert title never lands in front of something that opens a block', () => {
+  for (const [name] of ALERTS) {
+    assert.doesNotMatch(
+      render(doc(`> [!${name}]`, '>', '> - a list', '> - of two'), STYLED),
+      BAR_THEN_BLOCK,
+      `in ${name}`,
+    );
+  }
+});
+
+test('two quotes are decided independently', () => {
+  assert.equal(
+    render(doc('> Plain prose.', '', '> Not plain:', '>', '> - a list'), STYLED),
+    `${BAR}Plain prose.\n\n> ${BAR}Not plain:\n>\n> - a list`,
+    'a list in the second quote must not decide the first',
+  );
+});
+
+test('a quote or table inside a fence is sample text, not something to decorate', () => {
+  assert.equal(
+    render(doc('```md', '> quoted', '| a | b |', '|---|---|', '```'), STYLED),
+    '```md\n> quoted\n| a | b |\n|---|---|\n```',
+  );
+});
+
+test('table cells are padded, and the delimiter row is left to measure the columns', () => {
+  assert.equal(
+    render(doc('| byte | meaning |', '|---|---|', '| 3 | `softwareId` |'), STYLED),
+    '|&nbsp;byte&nbsp;|&nbsp;meaning&nbsp;|\n|---|---|\n|&nbsp;3&nbsp;|&nbsp;`softwareId`&nbsp;|',
+  );
+});
+
+test('a table written without outer pipes is padded the same way', () => {
+  assert.equal(
+    render(doc('byte | meaning', '--- | ---', '3 | id'), STYLED),
+    '&nbsp;byte&nbsp;|&nbsp;meaning&nbsp;\n--- | ---\n&nbsp;3&nbsp;|&nbsp;id&nbsp;',
+  );
+});
+
+test('an escaped pipe is content, not a cell boundary', () => {
+  assert.equal(
+    render(doc('| op | means |', '|---|---|', String.raw`| \| | bitwise or |`), STYLED),
+    `|&nbsp;op&nbsp;|&nbsp;means&nbsp;|\n|---|---|\n|&nbsp;${String.raw`\|`}&nbsp;|&nbsp;bitwise or&nbsp;|`,
+  );
+});
+
+test('prose containing a pipe is not a table', () => {
+  assert.equal(render(doc('Use a | b, never a || b.'), STYLED), 'Use a | b, never a || b.');
+});
+
+test('decoration is opt-in, so the default output stays portable Markdown', () => {
+  const block = doc('> Quoted.', '', '| a | b |', '|---|---|', '| 1 | 2 |');
+  assert.equal(render(block), '> Quoted.\n\n| a | b |\n|---|---|\n| 1 | 2 |');
+});
+
+/**
+ * The invariant `supportHtml` rests on. Every `<` from the source file is escaped
+ * or lands in a code span, so the only live tag in a hover is one we wrote. If
+ * this ever fails, `extension.ts` is handing VS Code attacker-authored HTML.
+ */
+test('a doc comment cannot smuggle markup of its own past the decorator', () => {
+  const hostile = [
+    '<span style="color:red;">tinted</span>',
+    '<img src="x" onerror="steal()">',
+    '<div><input checked/></div>',
+    '<SPAN Style="color:red;">case is not a defence</SPAN>',
+  ];
+  for (const line of hostile) {
+    assert.match(render(doc(line), STYLED), /^[^<]*$/, `raw markup survived: ${line}`);
+  }
+  // Inside a quote, where we do emit a tag, ours is the only one.
+  const quoted = render(doc('> <span style="color:red;">x</span>'), STYLED);
+  assert.equal(quoted.match(/<span/g)?.length, 1);
+  assert.ok(quoted.includes('&lt;span style="color:red;">x&lt;/span>'), quoted);
 });

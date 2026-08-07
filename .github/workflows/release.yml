@@ -1,0 +1,70 @@
+name: Release
+
+# Tag-triggered, so the tag is the record of what shipped and `check-release.mjs`
+# can hold it against package.json and CHANGELOG.md. Re-releasing means a new
+# tag, which is friction in the right place: the Marketplace has no undo, and a
+# published version can only be superseded, never replaced or withdrawn.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # gh release create
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Put VSCE_PAT and OVSX_PAT in an environment named `release` and add a
+    # required reviewer if you want a human between the tag and the Marketplace.
+    environment: release
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # First, before anything is built, because this is the step that can still
+      # say no. It also writes the release notes out of the changelog section for
+      # this version, reusing the parse it already did.
+      - name: Check the tag, the manifest and the changelog agree
+        run: node scripts/check-release.mjs --notes release-notes.md
+
+      - run: npm test
+
+      - name: Package
+        run: npx --no-install vsce package --out cs-md-docs-${{ github.ref_name }}.vsix
+
+      # The revocable step first. If a Marketplace publish fails below, the VSIX
+      # is already attached here and installable by hand.
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create ${{ github.ref_name }}
+          cs-md-docs-${{ github.ref_name }}.vsix
+          --title ${{ github.ref_name }}
+          --notes-file release-notes.md
+
+      # --packagePath, not a re-package: publishing the exact bytes that were
+      # attached above means the Marketplace and the GitHub release cannot be
+      # different builds of the same version.
+      - name: Visual Studio Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --no-install vsce publish --packagePath cs-md-docs-${{ github.ref_name }}.vsix
+
+      # Where VSCodium, Cursor, Windsurf and Gitpod install from; they cannot
+      # reach the Microsoft Marketplace at all. Last because it is the least
+      # consequential of the three to have to retry.
+      #
+      # The token is read from the environment (ovsx/lib/util.js), not passed as
+      # -p, so it never appears in an argument list.
+      - name: Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --no-install ovsx publish cs-md-docs-${{ github.ref_name }}.vsix
