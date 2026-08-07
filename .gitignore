@@ -1,3 +1,7 @@
 node_modules/
 out/
 *.vsix
+
+# Restored by the C# extension when the integration test opens sample/
+obj/
+bin/
