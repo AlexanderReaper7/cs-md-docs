@@ -8,7 +8,7 @@ Everything below was measured against the .NET 10 SDK and the extension's own te
 
 **Text outside an XML element is Markdown. Text inside one belongs to Roslyn.**
 
-The C# extension's hover renders `<summary>`, `<param>`, `<returns>` and friends, and silently discards everything else in the comment. cs-md-docs renders exactly that discarded remainder, as Markdown. The two halves are complementary, so nothing is ever shown twice, and neither half needs to know about the other.
+The C# extension's hover renders `<summary>`, `<param>`, `<returns>` and friends, and silently discards everything else. cs-md-docs renders exactly that discarded remainder, as CommonMark, so nothing is ever shown twice.
 
 ```csharp
 /// Sends a HID output report and waits for the matching input report.
@@ -21,76 +21,37 @@ The C# extension's hover renders `<summary>`, `<param>`, `<returns>` and friends
 public async Task<Reply> SendAsync(ReadOnlyMemory<byte> frame) { }
 ```
 
-The prose renders as Markdown in the hover. The `<param>` and `<exception>` render as Roslyn's structured sections.
-
 ## Where to put what
 
-| Content | Where | Why |
-|---|---|---|
-| The description, at any length | Untagged prose | This is the part Markdown buys you: lists, tables, fenced examples, links |
-| Parameters, returns, exceptions, type parameters | `<param>`, `<returns>`, `<exception>`, `<typeparam>` | Roslyn renders these with the parameter names bolded and aligned; reproducing them in prose gets you two copies |
-| A one-line summary for consumers who do **not** have this extension | `<summary>` | Untagged prose is invisible to a plain VS Code, to Rider, and to Visual Studio |
+| Content | Where |
+|---|---|
+| The description, at any length: lists, tables, fences, links | Untagged prose |
+| Parameters, returns, exceptions, type parameters | `<param>`, `<returns>`, `<exception>`, `<typeparam>` |
+| A one-line summary for readers without this extension (plain VS Code, Rider, Visual Studio) | `<summary>` |
 
-Do not write the same sentence in both places. A `<summary>` that repeats the first line of the prose shows up twice in the popup, once from each provider.
+Do not write the same sentence in both places. A `<summary>` repeating the first line of the prose shows up twice in the popup, once from each provider.
 
 ## Escaping: write `&lt;`, never `<`
 
-This is the rule that matters most, and the one that is counterintuitive.
+A raw `<` anywhere in a doc comment makes the compiler emit CS1570 **and drop the member's entire documentation**, `<param>` sections included. Backticks do not help, and neither does a fenced block: the compiler parses the whole comment as XML before anything else looks at it, and it does not know what a code span is.
 
-A raw `<` anywhere in a doc comment makes the compiler emit CS1570 **and drop the member's entire documentation** from the generated XML file:
-
-```xml
-<!-- Badly formed XML comment ignored for member "M:P.C.RawAngles" -->
-```
-
-Backticks do not help. A fenced code block does not help. The compiler parses the whole comment as XML before anything else looks at it, and it does not know what a code span is. The `<param>` sections go down with the prose.
-
-So write the entity, everywhere, including inside code spans and fenced blocks:
-
-```csharp
-/// Takes a `Span&lt;byte&gt;` and holds while `a &lt; b`.
-///
-/// ```csharp
-/// if (a &lt; b) { Send&lt;byte&gt;(frame); }
-/// ```
-```
-
-cs-md-docs decodes entities before rendering, in prose, in code spans and inside fences alike, so the hover shows `Span<byte>` and `if (a < b)`. One source, correct in both places.
+So write the entity everywhere, inside code spans and fences alike. cs-md-docs decodes entities before rendering, so `` `Span&lt;byte&gt;` `` reaches the hover as `Span<byte>`.
 
 - `<` → `&lt;`
 - `&` → `&amp;`
 - `>` needs no escape, and must not be escaped at the start of a line, where it is a blockquote.
 
-**Do not use `<![CDATA[...]]>`.** It is the XML-canonical escape hatch and the compiler accepts it, but cs-md-docs renders it verbatim: the reader sees `<![CDATA[` in the hover. Entities are the supported form.
+**Do not use `<![CDATA[...]]>`.** The compiler accepts it, but cs-md-docs renders it verbatim and the reader sees `<![CDATA[` in the hover.
 
-If the project does not set `<GenerateDocumentationFile>true</GenerateDocumentationFile>` none of this is enforced, but write the entities anyway. The setting gets turned on later, and then every comment in the repository has to be fixed at once.
+Write the entities even where the project does not set `<GenerateDocumentationFile>true</GenerateDocumentationFile>` and nothing is enforced. The setting gets turned on later, and then every comment in the repository has to be fixed at once.
 
-## What renders
+## What renders differently than you would expect
 
-Standard CommonMark, as understood by the renderer VS Code bundles.
-
-**Paragraphs.** Consecutive `///` lines are one soft-wrapped paragraph. A `///` line with nothing after it is a paragraph break. `<br/>` is a hard line break inside a paragraph.
-
-**Headings.** Written at the level you would use in a README, then demoted by two, so `# Examples` renders as an `<h3>`. This is `csMdDocs.demoteHeadings`, and it exists because a top-level heading in a hover is a title larger than the signature above it. Write `#` and `##`; anything deeper hits the `######` ceiling.
-
-**Lists**, ordered and unordered, nested by indentation.
-
-**Fenced code blocks.** A fence written without a language is labelled `csharp` and syntax highlighted, so ```` ``` ```` alone is enough for C#. Label it explicitly when it is not C#: a bare fence holding JSON or a shell command is tokenized as C# and mis-coloured. Everything inside a fence is opaque, including doc tags, so a fence may contain sample `///` comments.
-
-**Tables.** Cells are padded automatically. The hover is about 484px wide, so keep them to two or three narrow columns.
-
-**Blockquotes.** A quote of pure prose renders as a coloured bar rather than an indented block, because a real `blockquote` gives up 80px of that 484 to the browser's default margin. A quote containing a list, a fence, a heading, a table or a nested quote keeps its `>` markers, since that is what holds the construct inside the quote. Both cases are automatic.
-
-**Alerts.** The five GitHub alerts render with their own colour, icon and title:
-
-```csharp
-/// > [!WARNING]
-/// > Never match a reply by arrival order.
-```
-
-`NOTE`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`, and only those five: any other name inside the brackets is quoted prose, here and on GitHub. The marker has to be the quote's first line. Everything after it is an ordinary quote, so a list or a fence under an alert keeps its `>` markers.
-
-**Inline code spans** with backticks. Note that a code span is *never* syntax highlighted, in any VS Code hover, by any extension: there is no tokenizer on that path. Use a fenced block when the colour matters.
+- **Headings are demoted by two.** Write at the level you would use in a README, so `# Examples` renders as an `<h3>`. Anything past `##` hits the `######` ceiling.
+- **A fence without a language is labelled `csharp`** and highlighted as C#. Anything that is not C# needs an explicit language or it is tokenized as C# and mis-coloured.
+- **The hover is about 484px wide.** Keep tables to two or three narrow columns.
+- **An inline code span is never syntax highlighted**, in any VS Code hover, by any extension. Use a fence when the colour matters.
+- **GitHub alerts render** with their colour, icon and title: `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`, and only those five.
 
 ## Symbol links
 
@@ -100,57 +61,21 @@ Reference another type or member the way rustdoc does, and it becomes a link tha
 /// Pairs with [`Device.Send`], and unlike [the untagged one](Device.Untagged).
 ```
 
-Two spellings, both supported:
+- A bracket is a symbol reference only when it is **deliberate**: wrapped in backticks, or containing a `.` (or `::`). At least one segment must be PascalCase, which is what separates `Device.Send` from `readme.md`.
+- **No generic arguments and no parameter list.** Write `` [`List.Add`] ``, never `` [`List<T>.Add`] `` and never `` [`Device.Send(Span)`] ``. There is no overload resolution here, and both spellings fail: with a raw `<` the reference silently resolves to `List`, and with `&lt;` it is not recognised as a reference at all.
+- `<see cref="M:Namespace.Type.Member"/>` resolves down the same path, with the `T:`/`M:`/`P:` prefix stripped. `<see langword="null"/>` renders as a code span.
 
-- `` [`Device.Send`] `` or `[Device.Send]`, label and target in one
-- `[some other words](Device.Send)`, when you want a different label
+## Inline XML
 
-Rules that decide whether a bracket is a symbol reference at all:
+`<c>`, `<code>`, `<b>`, `<i>`, `<paramref>`, `<para>`, `<br/>`, `<list>`, `<listheader>` and `<a href>` are translated to their Markdown equivalents, so an older comment still renders. Prefer the Markdown spelling when writing: `**bold**` over `<b>`, backticks over `<c>`, a fence over `<code>`. `<u>` is dropped.
 
-- It must be **deliberate**: either wrapped in backticks, or containing a `.` (or `::`, accepted because it is what someone arriving from Rust types). A bare `[note]` in prose is left alone, so ordinary Markdown does not silently become a broken link.
-- At least one segment must be PascalCase. This is what separates `Device.Send` from `readme.md`.
-- Reference links `[text][ref]`, link definitions `[ref]: url`, and footnotes `[^1]` are never touched.
-- A destination that is a URL is an ordinary link.
-
-**Do not write generic arguments or a parameter list in a reference.** Write `` [`List.Add`] ``, never `` [`List<T>.Add`] ``. There is no overload resolution here, and a doc comment names a member rather than a signature, so the arguments buy nothing and cost you the link. Both spellings fail, in different directions:
-
-- with a raw `<`, everything from it onward is stripped and the reference resolves to `List`, silently landing on the wrong symbol
-- with the `&lt;` this document tells you to write everywhere else, the label is no longer a legal identifier path and the reference is not recognised as one at all, so it renders as an ordinary bracketed code span
-
-The same goes for a parameter list: `` [`Device.Send(Span)`] `` is not a reference.
-
-`<see cref="M:Namespace.Type.Member"/>` resolves down the same path and renders as the same link, with the `T:`/`M:`/`P:` doc-id prefix stripped. `<see langword="null"/>` renders as a code span.
-
-Links resolve through the C# workspace symbol provider, so they need the language server to have loaded the solution. An unresolvable reference degrades to a plain code span rather than a dead link.
-
-## Inline elements that are translated
-
-Use these freely outside a section; they become the Markdown equivalent.
-
-| Written | Renders as |
-|---|---|
-| `<c>x</c>`, `<tt>x</tt>` | `` `x` `` |
-| `<code>…</code>` | a fenced block, labelled `csharp` unless the element carries `language=` or `lang=` |
-| `<b>`, `<strong>` | `**bold**` |
-| `<i>`, `<em>` | `*italic*` |
-| `<paramref name="x"/>`, `<typeparamref name="T"/>` | `` `x` `` |
-| `<para>` | a paragraph break |
-| `<br/>` | a hard line break |
-| `<list><item>…` | a bullet list, or a numbered one with `type="number"` |
-| `<listheader><term>…` | an unmarked bold line above the items |
-| `<a href="…">text</a>` | a link |
-
-A `<list>` may be laid out however you like, indented and across as many lines as you want: inside one, the line endings and the indentation come from the tags and the source layout is discarded. The one thing that costs you is a blank line inside an `<item>`, so an item is a single paragraph. Write the Markdown form when you have the choice; the XML one exists so that a comment written before the extension still renders.
-
-`<u>` has no Markdown equivalent and is dropped. Prefer the Markdown spelling over the XML one throughout: `**bold**` over `<b>`, backticks over `<c>`, a fence over `<code>`. The XML forms exist so that a comment written before the extension still renders.
+A `<list>` may be laid out across as many lines as you like, since the source's indentation is discarded. The one thing that costs you is a blank line inside an `<item>`: an item is a single paragraph.
 
 ## Traps
 
-- **Four slashes is not a doc comment.** `//// text` is an ordinary comment and renders nowhere. Three exactly.
-- **These tags swallow their content**, because Roslyn owns it: `summary`, `remarks`, `returns`, `value`, `param`, `typeparam`, `exception`, `example`, `permission`, `completionlist`, `inheritdoc`, `include`, `seealso`, `altmember`, `threadsafety`. Markdown inside one of them is not rendered by anybody: Roslyn escapes it into literal prose. Put Markdown outside.
+- **These tags swallow their content**, because Roslyn owns it: `summary`, `remarks`, `returns`, `value`, `param`, `typeparam`, `exception`, `example`, `permission`, `completionlist`, `inheritdoc`, `include`, `seealso`, `altmember`, `threadsafety`. Markdown inside one is rendered by nobody; Roslyn escapes it into literal prose. Put Markdown outside.
 - **`<remarks>` is the tag to stop reaching for.** Long-form prose belongs untagged, which is the whole point of the extension.
-- **Order does not matter** but readability does. Prose first, then the sections, as in the example at the top.
-- The `/** … */` form works identically. `/*** … */` is an ordinary block comment and renders nowhere.
+- **Four slashes is not a doc comment.** `//// text` renders nowhere, and so does `/*** … */`. Three exactly, or `/** … */`.
 
 ## Checklist before you finish a comment
 
